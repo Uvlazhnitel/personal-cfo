@@ -1,0 +1,170 @@
+# Personal CFO Architecture
+
+Related specifications: [requirements](FRD.md), [canonical data model](DATA_MODEL.md), [financial engine](FINANCIAL_ENGINE.md), [decision log](DECISIONS.md), and [implementation plan](IMPLEMENTATION_PLAN.md).
+
+## Purpose and Constraints
+
+Personal CFO is a single-user, self-hosted financial decision system. V1 is a modular monolith: one codebase, one PostgreSQL database, one web process, and one worker process. The design optimizes for correctness, traceability, and simple operations rather than scale.
+
+The non-negotiable boundary is that authoritative financial values are produced by deterministic code. AI may classify ambiguous text and explain prepared results, but it cannot calculate or mutate financial state. Provider payloads are retained at the integration boundary and normalized before reaching the domain.
+
+## System Context
+
+```mermaid
+flowchart LR
+    U[Single user] -->|HTTPS| PWA[Next.js PWA]
+    U -->|Text and voice| TG[Telegram]
+    BANK[Open Banking provider] -->|Transactions and balances| APP[Personal CFO]
+    PT[Portfolio tracker] -->|Values and contributions| APP
+    TG <-->|Long polling| APP
+    APP -->|Minimal prepared context| AI[AI provider]
+    APP --> DB[(PostgreSQL)]
+    PWA --> APP
+```
+
+Open Banking, portfolio, Telegram voice, and AI adapters are later milestones. Their interfaces are designed now; no provider is required by the core.
+
+## Repository and Module Boundaries
+
+The implementation will use a pnpm workspace without an additional monorepo orchestrator:
+
+```text
+apps/
+  web/                  Next.js App Router, PWA, route handlers
+  worker/               scheduled and asynchronous job consumers
+packages/
+  domain/               canonical types, invariants, ports
+  financial-engine/     pure calculations and deterministic rules
+  data/                 Drizzle schema, repositories, migrations
+  integrations/         bank, portfolio, Telegram, FX, and AI adapters
+docs/                   requirements and design documents
+```
+
+`packages/domain` and `packages/financial-engine` contain no Next.js, PostgreSQL, Telegram, Open Banking, or AI imports. `packages/data` implements repository ports declared by the application/domain boundary. Provider-specific DTOs remain inside `packages/integrations`.
+
+Application services are app-local modules under `apps/web/src/application` and `apps/worker/src/application`: web services handle interactive commands and queries, while worker services handle ingestion and recalculation. Shared financial behavior belongs in the engine, and shared provider-neutral types/ports belong in the domain package; app orchestration is extracted only after real duplication appears.
+
+```mermaid
+flowchart TD
+    WEB[apps/web delivery] --> APP[Application services]
+    WORKER[apps/worker jobs] --> APP
+    APP --> ENGINE[packages/financial-engine]
+    APP --> DOMAIN[packages/domain]
+    DATA[packages/data adapters] --> DOMAIN
+    INTEGRATIONS[packages/integrations adapters] --> DOMAIN
+    WEB --> DATA
+    WORKER --> DATA
+    ENGINE --> DOMAIN
+    DATA --> PG[(PostgreSQL)]
+    INTEGRATIONS --> EXT[External providers]
+```
+
+Arrows mean “depends on.” Delivery code coordinates use cases but contains no financial formulas. Application services establish transactions, authorization, idempotency, and job dispatch. Repositories never decide financial meaning.
+
+## Canonical Data Flow
+
+```mermaid
+flowchart LR
+    SOURCE[External or manual input] --> RAW[Encrypted raw import]
+    RAW --> NORMALIZE[Provider adapter normalization]
+    NORMALIZE --> DEDUPE[Identity and duplicate checks]
+    DEDUPE --> CLASSIFY[Deterministic rules and review]
+    CLASSIFY --> LEDGER[Canonical transactions and entries]
+    LEDGER --> CALC[Deterministic financial engine]
+    CALC --> METRICS[Versioned metric snapshots]
+    METRICS --> RULES[Recommendation rules]
+    RULES --> CONTEXT[Allowlisted CFO context]
+    CONTEXT --> EXPLAIN[AI explanation]
+    METRICS --> PWA2[PWA]
+    RULES --> TG2[Telegram]
+```
+
+Every stage records its source identifier, processing status, and correlation ID. Normalization is idempotent. A classification correction appends a new classification version and queues recalculation from the earliest affected effective date. Old snapshots remain reproducible and are superseded rather than overwritten.
+
+## Runtime Responsibilities
+
+### Web and API
+
+The Next.js application serves the installable PWA and `/api/v1` route handlers. It owns local authentication, request validation, CSRF protection, query responses, and explicit user commands such as recording cash activity, correcting classification, managing Sinking Funds, or accepting a recommendation. Command endpoints require an `Idempotency-Key`; query endpoints are side-effect free.
+
+Public endpoints are limited to liveness/readiness checks and provider OAuth callbacks. OAuth callbacks validate state and PKCE before storing encrypted tokens. Financial endpoints require a server-side session and never expose raw provider payloads.
+
+The API serializes money and exact ratios as strings. It returns metric completeness and provenance with values so a client cannot present partial data as authoritative.
+
+### Worker and Background Jobs
+
+The worker uses pg-boss in the application PostgreSQL database. Jobs include:
+
+- connection synchronization and pending-to-booked reconciliation;
+- normalization, classification, and transfer matching;
+- affected-period recalculation and daily snapshots;
+- recurring-transaction and spending-drift detection;
+- recommendation evaluation and restrained notification delivery;
+- Telegram long polling and message processing.
+
+Jobs carry entity IDs, not secrets or full financial payloads. They are idempotent, have bounded exponential retries, and move to a dead-letter state after permanent exhaustion. Scheduled jobs use Europe/Riga calendar boundaries; stored execution times are UTC. A unique job key prevents duplicate schedules.
+
+### PWA
+
+The PWA is a decision-oriented projection over API data. It displays Net Worth, CCR, liquidity, Safe to Invest, investments, Sinking Funds, forecasts, and actionable insights. It performs display formatting and temporary what-if input only. It does not reproduce financial formulas or cache sensitive data for offline mutation. Service-worker caching is limited to static application assets; authenticated financial responses are network-only.
+
+### Telegram
+
+The Telegram adapter verifies the configured user ID before processing content. Text or transcribed voice becomes a proposed command. Deterministic parsing is attempted first; AI classification may fill ambiguous category or intent fields but cannot write directly. The application validates the proposal, applies confidence policy, persists the command, and returns a concise confirmation. Voice files are deleted after transcription or failure handling.
+
+### Financial and Recommendation Engines
+
+The financial engine accepts immutable canonical inputs and settings and returns typed results without I/O. It owns all formulas, rounding, missing-data behavior, and explanation components. A separate deterministic recommendation engine consumes those outputs and emits candidates with rule IDs, evidence, severity, and expiry. Neither engine sends messages or writes to the database.
+
+### AI Explanation Layer
+
+An AI adapter receives an allowlisted `CfoContext`: calculated amounts, metric changes, deterministic recommendation evidence, and only the minimum labels required for explanation. Raw bank payloads, credentials, account numbers, and unrelated transaction descriptions are excluded by default. AI output is stored as non-authoritative `CfoInsight` text linked to the calculation and prompt-policy versions. Invalid, unsupported, or number-inventing output is rejected or replaced by a deterministic template.
+
+### Integration Adapters
+
+Bank, portfolio, FX, Telegram, and AI integrations implement domain ports. Each adapter maps provider objects into canonical commands and exposes provider-neutral errors. Provider schema changes therefore cannot propagate into the financial engine. Connection capabilities record whether balances, pending transactions, stable IDs, holdings, or contribution history are available.
+
+## Error Handling and Data Completeness
+
+Errors are classified as validation, authentication, transient provider, rate limit, provider contract, conflict/duplicate, or internal invariant failures. Transient failures retry with jitter. Authentication failures disable the connection and request user action. Contract failures quarantine the raw record for review. Invariant failures stop the affected calculation and emit a high-severity operational alert; they never coerce missing values to zero.
+
+Every derived result is `complete`, `partial`, or `unavailable`, with stale sources and missing periods listed. Partial results may be displayed with a warning but cannot produce invest-more recommendations. A failed sync does not erase the last valid snapshot.
+
+## Authentication and Security Boundaries
+
+V1 has one bootstrapped local account. Passwords use Argon2id; session identifiers are random, stored hashed, rotated after login, and delivered only in `Secure`, `HttpOnly`, `SameSite=Lax` cookies. State-changing browser requests require CSRF validation. Login and public callbacks are rate-limited at Caddy and application levels.
+
+The first user is created through an explicit one-off, interactive administration command inside the web container. There is no default credential, public registration, password value in Compose, or password-reset email flow in V1.
+
+Integration tokens are encrypted with authenticated encryption using a versioned key supplied outside the database. Banking passwords are never requested or stored. Logs redact tokens, account identifiers, raw descriptions, message text, and monetary payloads. Database and backup access is limited to the application operator. Data sent to an AI provider is minimized and separately auditable.
+
+## Deployment and Operations
+
+```mermaid
+flowchart TB
+    INTERNET[Internet] --> CADDY[Caddy: TLS, limits, headers]
+    CADDY --> WEB[Next.js web container]
+    WEB --> PG[(PostgreSQL volume)]
+    WORKER[Worker container] --> PG
+    WEB --> PROVIDERS[External APIs]
+    WORKER --> PROVIDERS
+    BACKUP[Encrypted backup job] --> PG
+    BACKUP --> OFFSITE[Operator-selected off-host storage]
+```
+
+Docker Compose runs Caddy, web, worker, and PostgreSQL on one Linux host. Only Caddy publishes ports. Containers run as non-root users, use read-only filesystems where practical, and receive secrets through deployment-managed files or environment injection. Database migrations run as an explicit release step, never automatically from multiple application replicas.
+
+Health endpoints distinguish process liveness from readiness to reach PostgreSQL and the job queue. Structured JSON logs include request/job correlation IDs, outcome, duration, and provider category without financial content. Operational metrics cover sync age, quarantined records, dead letters, calculation duration, stale snapshots, login failures, and backup age.
+
+Create encrypted daily PostgreSQL backups, retain them off-host, and verify integrity after creation. A documented restore drill must be run before production use and periodically thereafter. Exact RPO, RTO, retention, and destination remain open decisions in `DECISIONS.md`.
+
+## Evolution Rules
+
+The single-user owner ID is still present on user-owned records so multi-user support does not require redefining ownership. It is not permission to add multi-user UX in V1. New providers enter through adapters; new calculations enter through versioned pure functions. Split a runtime into a service only after measured operational or deployment needs demonstrate that the modular monolith is insufficient.
+
+## Technology References
+
+- [Node.js release schedule](https://nodejs.org/en/about/previous-releases)
+- [Next.js self-hosting guidance](https://nextjs.org/docs/app/guides/self-hosting)
+- [Drizzle PostgreSQL types](https://orm.drizzle.team/docs/column-types) and [migration workflow](https://orm.drizzle.team/docs/migrations)
+- [pg-boss PostgreSQL job queue](https://github.com/timgit/pg-boss)
