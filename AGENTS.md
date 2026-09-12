@@ -31,7 +31,7 @@ Dependencies point inward: delivery and adapters may depend on domain interfaces
 
 ## Development and Testing
 
-The repository remains documentation-only until Stage 1A, so no build commands exist yet. Stage 1A must expose root `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm format` commands and update this guide if commands change.
+Use Node.js 24 and pnpm 11.19.0. Install with `pnpm install --frozen-lockfile`. Run `pnpm lint` for source and package-boundary checks, `pnpm typecheck` for strict TypeScript, `pnpm test` for Vitest, and `pnpm format:check` before submitting. Use `pnpm format` to apply formatting and `pnpm test:coverage` when measuring coverage.
 
 Use strict TypeScript. Store money as integer minor units using `bigint`; serialize it as strings and never use JavaScript floating point in financial paths. Keep critical functions pure and pass time, settings, and inputs explicitly.
 
