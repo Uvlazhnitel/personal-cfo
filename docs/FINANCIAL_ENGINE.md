@@ -25,6 +25,8 @@ declare function evaluateFinancialState(
 
 Inputs are immutable canonical domain values. Output explanation components contain labeled input amounts and rule IDs; they are facts for UI or AI wording, not generated prose.
 
+`FinancialEngineResult` exposes current-cycle Sinking Fund due, completed Pay Cycle capacities, unresolved-ambiguity warnings, and the existing metric completeness state. These are provider-neutral values; the engine does not create allocations or resolve transactions.
+
 ## Common Numerical and Time Rules
 
 - Money uses signed integer minor units. Rates and ratios use arbitrary-precision decimals. JavaScript binary floating point is prohibited in financial paths.
@@ -35,6 +37,7 @@ Inputs are immutable canonical domain values. Output explanation components cont
 - Only booked activity enters authoritative historical metrics. Pending debits may reduce prospective liquidity; pending credits never increase investable money.
 - Calculations carry `complete`, `partial`, or `unavailable`. An invest-more or Step-Up recommendation requires complete inputs.
 - Material stale data makes dependent metrics unavailable by default: bank/cash balance older than 3 days, portfolio value older than 3 market days, or an unresolved transaction greater than `max(€100, 2% of rolling monthly recognized income)`. These thresholds are settings.
+- Plausible unresolved transfers and unexplained cash variances follow their explicit policies below. They are never silently coerced into income or consumption to make a metric complete.
 
 ## Net Worth and Capital Attribution
 
@@ -114,6 +117,14 @@ It is not the mean of monthly percentages. Current month and rolling 3-, 6-, and
 - Unresolved credits cannot count as income; unresolved material debits make CCR partial.
 - A changed classification, fund allocation, refund link, FX rate, or opening boundary recalculates every affected rolling window.
 
+## Unresolved Transfer Candidates
+
+A plausible booked bank-to-cash, bank-to-brokerage, or other internal transfer receives the provisional type `unresolved_transfer`. It is displayed separately as under review and is excluded from authoritative consumption and recognized income until confirmed or rejected.
+
+Consumption and CCR for every affected period are `partial`. A material candidate makes Safe to Invest unavailable and suppresses invest-more, Cash Drag, and Step-Up recommendations. A non-material candidate permits a provisional Safe-to-Invest value from reconciled cash balances, but its result remains `partial` with an ambiguity warning. Net Worth may remain complete when authoritative balances on all affected accounts are complete.
+
+Confirmation classifies the linked entries as an internal transfer. Rejection applies the appropriate external-flow classification. Either resolution appends history and recalculates all affected periods and rolling windows.
+
 ## Spending Baseline
 
 ### Inputs and Algorithm
@@ -147,7 +158,8 @@ Recalculate after a completed month, recurring-series change, irregular flag, re
 - `Operational essential`: booked/pending essential debits and scheduled essential costs before the next reliable income date, less no pending credits.
 - `Operational normal`: the same horizon including normal discretionary spending.
 - `Ring-fenced`: active Sinking Fund allocations and other explicitly restricted cash.
-- `Uncovered obligations`: mandatory amounts due in the configured near-term horizon that are neither covered by a fund nor already included in recurring/operational spending.
+- `Current-cycle Sinking due`: required committed-fund contributions due in the open Pay Cycle but not yet allocated.
+- `Uncovered obligations`: mandatory amounts due in the configured near-term horizon that have no active Sinking Fund and are not already included in recurring/operational spending.
 - `Minimum reserve target`: essential baseline × minimum reserve months.
 - `Comfort reserve target`: normal baseline × comfort reserve months, plus one variability buffer.
 
@@ -159,33 +171,67 @@ For a mandatory obligation expressed as a range, liquidity and Safe to Invest us
 
 ```text
 minimum cash = ring-fenced
+             + current-cycle Sinking due
              + uncovered obligations
              + max(operational essential, minimum reserve target)
 
 comfort cash = ring-fenced
+             + current-cycle Sinking due
              + uncovered obligations
              + max(operational normal, comfort reserve target)
 
 free liquid cash = liquid cash - ring-fenced
 ```
 
-Using `max` prevents current-cycle operating costs from being added again when the reserve target already covers them. An obligation linked to a funded Sinking Fund or recurring forecast is counted only for its uncovered portion.
+Using `max` prevents current-cycle operating costs from being added again when the reserve target already covers them. An obligation linked to an active Sinking Fund is represented by its allocated balance plus current-cycle due, not by adding the full future obligation again. An obligation in the operational forecast is likewise not repeated as uncovered.
 
 Pending debits increase operational need; pending credits do not reduce it. If the next income date is unknown, use 31 days and mark partial. If liquid balances, baseline, obligations, or reservation coverage are materially incomplete, the reserve is partial and Safe to Invest is unavailable.
 
 ## Sinking Funds
 
-### Contribution Formula
+### Pay-Cycle Boundary
 
-Creating a fund records a target but reserves nothing. An allocation explicitly designates existing liquid cash. For an active fund:
+A Pay Cycle begins at a booked transaction from the configured primary salary source and ends immediately before the next booked primary salary. Side-hustle income does not open a cycle. Historical boundaries use actual salary bookings; expected salary cadence is used only to count future funding opportunities. A missing or delayed next salary leaves the current cycle incomplete.
+
+### Current-Cycle Contribution Formula
+
+Creating a fund records a target but reserves nothing. An allocation explicitly designates existing liquid cash. When salary opens a Pay Cycle, create a versioned requirement for each committed active fund. Creating or changing a fund mid-cycle creates or supersedes its requirement immediately.
 
 ```text
-remaining = max(0, target - allocated balance)
-cycles = scheduled contribution dates strictly before or on due date
-required contribution = ceil_to_minor_unit(remaining / cycles)
+allocation before cycle = allocated balance immediately before cycle open
+future opportunities = expected primary-pay dates after this cycle
+                       and on or before the fund due date
+cycle share = ceil_to_minor_unit(
+    max(0, target - allocation before cycle)
+    / (1 + future opportunities)
+)
+current-cycle outstanding = max(
+    0,
+    cycle share - net allocation credited during this cycle
+)
 ```
 
-If the due date is today or overdue, cycles is one and the full remaining amount is due now. A fully funded or overfunded fund requires zero contribution. Overfunding is not released automatically.
+Cap outstanding at the fund's current unallocated shortfall. If no future opportunity occurs before the due date, the current cycle is the only opportunity and the entire shortfall is due now. Releases increase the outstanding amount when applicable. A fully funded or overfunded fund requires zero contribution; overfunding is not released automatically.
+
+The outstanding amount becomes due at salary booking, or immediately for a committed fund created or changed mid-cycle. It enters minimum and comfort cash before an allocation exists. When €X is allocated, current-cycle due falls by €X while ring-fenced cash rises by €X, so required liquidity and Safe to Invest do not change. Only the actual allocation changes reserved balance and CCR.
+
+### Allocation Policy
+
+Allocation is manual by default. A fund may explicitly enable `on_primary_income`. At salary receipt or a mid-cycle fund change, the application may convert the deterministic outstanding amount into an audited virtual allocation; no physical bank transfer occurs.
+
+Automatic allocation orders funds by earliest due date, explicit priority, then stable fund ID. It is capped at unallocated liquid cash above non-Sinking minimum cash:
+
+```text
+non-Sinking minimum cash = uncovered obligations
+                         + max(operational essential, minimum reserve target)
+
+auto-allocatable cash = max(
+    0,
+    liquid cash - ring-fenced - non-Sinking minimum cash
+)
+```
+
+A partial allocation leaves the rest outstanding and protected by Safe to Invest. Manual allocation may use any otherwise unallocated cash but must warn if it leaves free cash below non-Sinking minimum liquidity.
 
 An allocation cannot exceed eligible liquid cash. Spending linked to the fund lowers cash and allocated balance by the covered amount. Any excess spending is ordinary current-period consumption. A smaller-than-planned purchase leaves the remainder reserved until the user releases, rolls over, or reallocates it.
 
@@ -195,7 +241,7 @@ Fund target, due date, allocation, release, and spending-link changes recalculat
 
 ### Formula and Tiers
 
-The liquidity calculations already include operational needs, uncovered obligations, and Sinking Fund allocations. Safe to Invest therefore subtracts each complete threshold exactly once:
+The liquidity calculations already include operational needs, uncovered obligations, current-cycle Sinking due, and Sinking Fund allocations. Safe to Invest therefore subtracts each complete threshold exactly once:
 
 ```text
 conservative = max(0, liquid cash - comfort cash - variability buffer)
@@ -204,6 +250,8 @@ maximum      = max(0, liquid cash - minimum cash)
 ```
 
 Thus `conservative ≤ recommended ≤ maximum`. Values are rounded down to the configured recommendation increment, €10 by default; unrounded values remain in audit/explanation data.
+
+The buffer difference is intentional. Comfort cash already preserves one variability buffer above the unbuffered comfort baseline. Recommended Safe to Invest preserves that normal Comfort Cash policy; conservative preserves Comfort Cash plus one additional variability buffer. Conservative therefore protects two variability buffers relative to the unbuffered comfort baseline. Maximum preserves Minimum Cash.
 
 The result lists liquid cash, ring-fenced funds, uncovered obligations, operational need, reserve target, variability buffer, pending-debit adjustment, and rounding. It recalculates after income, material spending, balances, obligations, reservations, baseline changes, or settings changes.
 
@@ -228,7 +276,17 @@ The recommendation amount is bounded by current recommended Safe to Invest, not 
 
 ## Investment Step-Up and Step-Down
 
-The engine evaluates four complete calendar months by default. Each month must have reconciled sources, no minimum-liquidity breach, and no unresolved material transactions. Define monthly sustainable capacity as the recommended Safe-to-Invest amount immediately after ordinary month-end obligations, plus the recurring investment already made that month. Overall capacity is the minimum of the four monthly capacities.
+The engine evaluates the latest four complete Pay Cycles. Each cycle requires two actual primary-salary boundaries, reconciled sources, no minimum-liquidity breach, and no unresolved material transaction or cash variance. Salary placement within a calendar month has no effect.
+
+```text
+cycle capacity = recurring investment contributions during the cycle
+               + recommended Safe to Invest immediately before
+                 the closing salary is booked
+
+sustainable capacity = median(last four cycle capacities)
+```
+
+For four observations, median is the half-even minor-unit average of the two central sorted values. Median is selected because minimum is overly sensitive to one legitimate expensive cycle, while a four-sample lower quartile is unstable and behaves too similarly to minimum. Median is not sufficient alone: every proposed contribution must pass the forward stress test.
 
 A Step-Up is eligible when capacity is at least one step above the current recurring contribution and Cash Drag or persistent surplus evidence exists. The default step is €50:
 
@@ -239,9 +297,19 @@ new recurring contribution = min(
 )
 ```
 
-Only one step is recommended per four-month reassessment window. Acceptance does not execute a brokerage instruction.
+Stress the candidate over the next 60 days using current balances, expected primary salary, normal spending, upper-bound committed obligations, current and projected Sinking requirements, and 0% market return. Cash must remain at or above minimum cash throughout and finish at or above comfort cash. Reduce a failing candidate by €50 steps until one passes; if no increase passes, recommend hold.
 
-A hold is recommended if capacity is uncertain or within one step of the current contribution. A Step-Down is eligible if current contribution exceeds sustainable capacity or the 60-day deterministic cash forecast breaches minimum cash. The proposed amount is the largest €50 multiple not exceeding capacity, including zero. A projected minimum-cash breach bypasses the normal cooldown.
+Only one step is recommended per four-Pay-Cycle reassessment window. Acceptance does not execute a brokerage instruction.
+
+A hold is recommended if capacity is uncertain or within one step of the current contribution. A Step-Down is eligible if the current contribution exceeds sustainable capacity or fails the same 60-day test. Reduce it by €50 steps to the greatest amount that passes, including zero. A projected minimum-cash breach bypasses the normal cooldown.
+
+## Cash Reconciliation
+
+A physical count sets the Cash Account's authoritative balance from the reconciliation instant by creating a signed `cash_reconciliation_adjustment`; it never overwrites prior entries.
+
+The variance changes Net Worth, liquidity, and Safe to Invest immediately and appears as unexplained cash gain or loss. It is excluded from recognized income, ordinary consumption, the spending baseline, and CCR. A non-material variance retains calculated metrics with an explicit warning. A material variance makes affected CCR partial and suppresses invest-more, Cash Drag, and Step-Up recommendations until resolved.
+
+If the cause is found, either reclassify the adjustment itself or reverse it before recording the recovered transaction. The engine must reject any resolution that would apply the balance difference twice.
 
 ## Expense Optimization
 
@@ -297,6 +365,16 @@ Month one has €3,000 income, €2,000 consumption, and a €300 trip allocatio
 
 If liquid cash is €7,200, ring-fenced and uncovered amounts are already included in comfort cash of €5,300, minimum cash is €4,700, and variability buffer is €200, the unrounded tiers are €1,700 conservative, €1,900 recommended, and €2,500 maximum. No component is subtracted again.
 
+Comfort cash in this example already contains its normal variability buffer. The conservative €1,700 result preserves another €200, exactly one buffer more than the €1,900 recommended result.
+
+### Current-Cycle Sinking Requirement
+
+Liquid cash is €7,000 and a €1,200 committed trip has no allocation with six funding opportunities remaining. The current-cycle due is €200. If comfort cash excluding the due is €4,500, recommended Safe to Invest is `7000 - 4500 - 200 = €2,300`. After allocating €200, ring-fenced cash rises to €200 and outstanding due falls to zero; recommended Safe to Invest remains €2,300.
+
+### Cash Count
+
+If the ledger says Cash is €140 and the user counts €125, reconciliation creates a `-€15` unexplained adjustment. Net Worth and Safe to Invest fall by €15, while recognized income, ordinary consumption, baseline spending, and CCR inputs do not change.
+
 ## Test Strategy
 
 Use table-driven Vitest unit tests and fast-check property tests. A synthetic ledger must cover:
@@ -310,6 +388,8 @@ Use table-driven Vitest unit tests and fast-check property tests. A synthetic le
 - excess cash, insufficient cash, pending debits, and pending credits;
 - market gain without contribution and contribution without market gain;
 - duplicate imports and pending-to-booked reconciliation;
+- unresolved bank-to-cash and bank-to-brokerage transfer candidates;
+- physical-cash reconciliation and later cause resolution;
 - transaction reclassification, settings changes, and historical recalculation;
 - missing FX, stale portfolio, missing income date, zero-income CCR, and DST/month boundaries.
 
@@ -321,8 +401,18 @@ Required properties include:
 - market return never changes CCR;
 - a Sinking Fund allocation never changes Net Worth;
 - allocation plus later covered spending affects cumulative capital creation exactly once;
+- replacing current-cycle Sinking due with an equal allocation leaves Safe to Invest unchanged;
+- partial automatic allocation leaves the unallocated remainder protected;
 - duplicate import is idempotent;
 - `conservative ≤ recommended ≤ maximum` and all are non-negative;
+- conservative Safe to Invest is exactly one variability buffer below recommended before rounding;
 - adding an uncovered obligation cannot increase Safe to Invest;
+- equivalent cash flows anchored to salary on the 1st or 28th produce equal Pay Cycle capacity;
+- capacities `[€20, €200, €200, €220]` produce a €200 median before stress testing;
+- a failing 60-day stress test cannot produce a Step-Up even when median capacity permits one;
+- unresolved transfer candidates never enter authoritative consumption or income;
+- reconciliation from €140 to €125 changes cash and Net Worth once without inventing consumption or income;
+- material transfer or cash ambiguity suppresses invest-more recommendations;
+- resolving either ambiguity deterministically supersedes affected snapshots;
 - identical versioned inputs produce identical outputs;
 - snapshot components reconcile to their displayed totals in exact minor units.

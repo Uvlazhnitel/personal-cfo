@@ -55,7 +55,7 @@ Invariants:
 - Entries for one account and provider identity are idempotent.
 - A confirmed internal transfer has at least one source and one destination entry and has zero consumption and income classification.
 - Same-currency internal transfer entries sum to zero, allowing an explicit fee entry if necessary.
-- An unmatched transfer candidate is not automatically excluded from spending; it remains unresolved until deterministic evidence or user confirmation is available.
+- A plausible unmatched transfer is classified as `unresolved_transfer`, never as authoritative consumption or income, until deterministic evidence or user confirmation resolves it.
 - Opening balances establish a measurement boundary and never count as income or capital creation.
 
 ### TransactionClassification and Rule
@@ -64,7 +64,15 @@ Invariants:
 
 `ClassificationRule` records user-approved matching conditions for a normalized merchant/counterparty and its output. Rules are versioned, can be disabled, and never rewrite history silently. Changing a rule creates new classifications and a recalculation request.
 
-`Counterparty` holds a normalized display name and non-sensitive match keys. `IncomeSource` identifies salary, side hustle, or another source and includes stability and expected cadence. `RecurringTransaction` describes a detected or confirmed series, expected amount/range, cadence, next date, category, and confidence.
+`Counterparty` holds a normalized display name and non-sensitive match keys. `IncomeSource` identifies salary, side hustle, or another source and includes stability, expected cadence, and whether it is the primary pay-cycle anchor. `RecurringTransaction` describes a detected or confirmed series, expected amount/range, cadence, next date, category, and confidence.
+
+`PayCycle` is provider-neutral. It links its opening booked primary-salary transaction, opening instant, expected next pay date, optional closing primary-salary transaction/instant, and completeness status. A cycle begins when primary salary is booked and ends immediately before the next booked primary salary. Side-hustle income does not open a cycle. A missing or delayed next salary leaves the cycle open and unavailable for Step-Up observation.
+
+### TransferCandidate
+
+`TransferCandidate` links one or more transactions/entries that might form a bank-to-cash, bank-to-brokerage, or other internal transfer. It stores candidate kind, evidence, confidence, materiality result and threshold version, status (`unresolved`, `confirmed_transfer`, `rejected_transfer`), resolver, resolution time, and audit reason.
+
+While unresolved, its entries remain in account balances but are excluded from authoritative consumption and income. Resolution appends transaction relation/classification versions and requests recalculation; it never overwrites the imported facts.
 
 ## Import Identity and Deduplication
 
@@ -110,23 +118,31 @@ Investment return for a period is derived from portfolio value changes adjusted 
 
 Telegram or PWA cash commands create canonical transactions with a client idempotency key and a Cash Account entry. The original message may be retained only under the configured privacy policy. Cash corrections are compensating records or explicit edits with audit history; deleting the source message never silently deletes the financial fact.
 
+`CashReconciliation` records Cash Account ID, calculated balance, physically counted balance, signed variance, reconciliation instant, actor, optional reason, materiality result, and the linked adjustment transaction. It never overwrites prior entries. The adjustment uses type `cash_reconciliation_adjustment`; it changes the account balance and Net Worth but is not ordinary consumption or recognized income.
+
+If a forgotten transaction is identified later, either reclassify the adjustment itself with added details or reverse the adjustment before adding the recovered transaction. Both paths preserve the audit trail and ensure the balance changes only once.
+
 ## Planning and Reservation Entities
 
 ### SinkingFund
 
-`SinkingFund` contains ID, owner, name, target amount, due date, priority, status, and timestamps. It is a plan, not a physical account. `SinkingFundAllocation` records dated positive allocations, spending draws, releases, and corrections. The sum of active allocations is the reserved balance.
+`SinkingFund` contains ID, owner, name, target amount, due date, priority, commitment status, lifecycle status, allocation policy, and timestamps. `SinkingFundAllocationPolicy` is `manual` by default or the explicit per-fund value `on_primary_income`. A fund is a plan, not a physical account. `SinkingFundAllocation` records dated positive allocations, spending draws, releases, and corrections. The sum of active allocations is the reserved balance.
 
 Creating or raising a target does not allocate cash. Total active allocations may not exceed eligible liquid cash; an unfunded target is represented as a shortfall, not negative free cash. Spending linked to a fund reduces both cash and its reserved balance. Canceling a fund requires the user to release or reassign its remaining allocation.
 
+`SinkingFundCycleRequirement` records fund ID, Pay Cycle ID, required amount, satisfied amount, outstanding amount, target and allocation inputs, remaining funding opportunities, calculation version, effective time, and optional superseded-by ID. It becomes due when primary salary opens a cycle or immediately when a committed fund is created or changed mid-cycle. Superseded requirements remain auditable.
+
+An opt-in automatic allocation is still an ordinary `SinkingFundAllocation` linked to its requirement and originating command/job. It never moves physical money. Automatic allocation processes funds by due date, explicit priority, then ID, and is limited to unallocated liquid cash above non-Sinking minimum liquidity. Any unfunded remainder stays outstanding.
+
 ### FutureObligation
 
-`FutureObligation` represents a dated expected outflow with amount/range, mandatory flag, recurrence link, confidence, source, and optional Sinking Fund. The engine counts only the obligation portion not already covered by a fund and not already present in its operational recurring forecast. This coverage link prevents reserve double counting.
+`FutureObligation` represents a dated expected outflow with amount/range, mandatory flag, recurrence link, confidence, source, and optional Sinking Fund. Without an active fund, liquidity counts the uncovered near-term amount not already present in its operational recurring forecast. With an active committed fund, liquidity uses the fund's allocated balance plus current-cycle requirement and does not add the full obligation separately. This coverage link prevents reserve double counting.
 
 ### FinancialSettings
 
 Settings are effective-dated and versioned. They include reporting currency, risk profile, reserve months, variability percentile, materiality threshold, Cash Drag persistence, Step-Up window/step, baseline window, forecast rates, inflation, and stale-data limits. A snapshot references one settings version. Changing settings schedules recalculation; it never mutates prior snapshot inputs.
 
-`LiquidityConfiguration` is the effective-dated settings component for essential/normal classification, income stability, minimum and comfort months, operational horizon, obligation horizon, and variability percentile. Keeping it explicit prevents UI defaults from becoming hidden financial rules.
+`LiquidityConfiguration` is the effective-dated settings component for essential/normal classification, income stability, minimum and comfort months, operational horizon, obligation horizon, variability percentile, current-cycle funding policy, and Step-Up stress horizon. Keeping it explicit prevents UI defaults from becoming hidden financial rules.
 
 ## Derived State and Recommendations
 
@@ -144,7 +160,7 @@ Snapshots are derived caches, not primary financial facts. They may be rebuilt f
 
 ## Recalculation and Audit
 
-`RecalculationRequest` records the earliest affected date, reason, requested engine/settings version, deduplication key, status, and error. Causes include booking, correction, transfer matching, FX-rate revision, portfolio revision, and settings change. The worker recomputes forward through the current date because rolling windows and fund balances can propagate an older change.
+`RecalculationRequest` records the earliest affected date, reason, requested engine/settings version, deduplication key, status, and error. Causes include booking, Pay Cycle opening/closure, correction, transfer resolution, cash reconciliation, fund requirement/allocation changes, FX-rate revision, portfolio revision, and settings change. The worker recomputes forward through the current date because rolling windows and fund balances can propagate an older change.
 
 `AuditEvent` records security- and finance-relevant commands using actor, action, entity reference, time, outcome, and redacted metadata. It does not duplicate raw secrets or financial descriptions.
 
@@ -154,10 +170,12 @@ Snapshots are derived caches, not primary financial facts. They may be rebuilt f
 | --- | --- | --- |
 | Bank movement and balance | Booked Open Banking record | Manual correction is separate and audited. |
 | Cash movement | Accepted user command | ATM destination is linked to bank movement. |
+| Physical cash balance | Latest Cash Reconciliation plus subsequent entries | Variance remains an explicit adjustment. |
 | Classification | Latest user override, then active deterministic rule | AI output is only a proposal. |
 | Portfolio market value | Latest complete portfolio snapshot | Staleness is explicit. |
 | Contribution principal | Confirmed transfer/contribution link | Provider aggregate is reconciliation evidence. |
 | Reserved cash | Sinking Fund allocation ledger | Physical account balance is not partitioned. |
+| Current-cycle Sinking amount due | Versioned Sinking Fund cycle requirement | It remains distinct from allocated cash. |
 | Financial metrics | Versioned deterministic-engine result | Snapshots are rebuildable. |
 | Recommendation action | Explicit user outcome | Recommendation text cannot execute an action. |
 

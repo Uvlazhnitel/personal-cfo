@@ -1,36 +1,46 @@
 # Repository Guidelines
 
-## Project Structure & Module Organization
+## Sources of Truth
 
-This repository is currently requirements-first. The authoritative specification is `docs/FRD.md`; update it when behavior, scope, calculations, or integrations change. Keep additional design notes under `docs/`, using names such as `docs/open-banking.md`.
+Use each document only for its stated concern:
 
-No application or test directories exist yet. When implementation begins, use `src/` for application code, `tests/` for tests, and `assets/` for static files. Separate financial formulas, integrations, Telegram handling, and UI concerns.
+- `docs/FRD.md`: product intent and functional requirements.
+- `docs/ARCHITECTURE.md`: runtime, module, dependency, security, and deployment boundaries.
+- `docs/DATA_MODEL.md`: canonical entities, relationships, identity, and source-of-truth rules.
+- `docs/FINANCIAL_ENGINE.md`: authoritative formulas, policies, completeness, and rounding.
+- `docs/DECISIONS.md`: accepted decisions and unresolved questions.
+- `docs/IMPLEMENTATION_PLAN.md`: delivery order and acceptance criteria.
 
-## Build, Test, and Development Commands
+Do not silently resolve conflicts between these documents. Record the conflict in `docs/DECISIONS.md` and reconcile the affected specifications before implementation.
 
-No package manifest, build system, or test runner exists yet. Useful checks today include:
+## Project Structure
 
-```sh
-rg '^## FR-' docs/FRD.md     # list functional requirements
-git diff --check             # detect whitespace errors (after Git setup)
+The accepted pnpm workspace layout is:
+
+```text
+apps/web/                  Next.js PWA and API delivery
+apps/worker/               background and scheduled work
+packages/domain/           canonical types, invariants, and ports
+packages/financial-engine/ pure deterministic calculations
+packages/data/             Drizzle schema and repositories
+packages/integrations/     external-provider adapters
+docs/                      requirements and design
 ```
 
-When adding tooling, expose `test`, `lint`, `format`, and `dev` tasks and update this guide.
+Dependencies point inward: delivery and adapters may depend on domain interfaces; the financial engine depends only on provider-neutral domain types and deterministic utilities. Provider DTOs, persistence models, framework types, and AI clients must not enter the engine.
 
-## Coding Style & Naming Conventions
+## Development and Testing
 
-Commit formatter and linter configuration with the first implementation. Until then, use four spaces in code examples, UTF-8 text, and concise Markdown headings. Prefer domain names such as `safeToInvest`, `sinkingFund`, and `cashAccount`. Reference FRD IDs where traceability helps, for example `FR-070 calculates investable cash`.
+The repository remains documentation-only until Stage 1A, so no build commands exist yet. Stage 1A must expose root `pnpm lint`, `pnpm typecheck`, `pnpm test`, and `pnpm format` commands and update this guide if commands change.
 
-Keep critical financial calculations deterministic and isolated from AI-generated explanations. Represent money with decimal or integer minor-unit types, never binary floating point.
+Use strict TypeScript. Store money as integer minor units using `bigint`; serialize it as strings and never use JavaScript floating point in financial paths. Keep critical functions pure and pass time, settings, and inputs explicitly.
 
-## Testing Guidelines
+Unit-test every formula and edge case. Use integration fixtures rather than live credentials, and reference FRD IDs in tests when traceability helps. Internal transfers, cash reconciliation, duplicate imports, classification changes, and historical recalculation require explicit regression coverage.
 
-Unit-test every financial formula and edge cases such as transfers, refunds, duplicate imports, reserved cash, and currencies. Integration-test bank, portfolio, and Telegram adapters with fixtures, not live credentials. Name tests after observable behavior and reference the relevant FRD ID. Run the full suite before opening a pull request.
+## Commits and Pull Requests
 
-## Commit & Pull Request Guidelines
+Follow the established Conventional Commit style with short imperative subjects, for example `docs: reconcile pay-cycle policies` or `feat(domain): add money primitives`. Pull requests must identify affected requirements and decisions, summarize validation, and call out migrations, configuration, security implications, and screenshots when applicable.
 
-Git history is unavailable, so no existing convention can be inferred. Use short, imperative subjects, optionally with a Conventional Commit prefix: `feat: add cash transfer classification`. Pull requests should summarize the change, identify affected requirements, report validation, and include screenshots for UI changes. Link issues and call out migrations, configuration, or security implications.
+## Security
 
-## Security & Configuration
-
-Never commit banking credentials, API tokens, personal transaction data, or production exports. Keep secrets in ignored environment files or a secret manager. Encrypt stored tokens, authenticate financial APIs, and whitelist the permitted Telegram user ID as required by `docs/FRD.md`.
+Never commit credentials, tokens, personal transaction data, production exports, or unredacted provider payloads. Use sanitized fixtures. Preserve authentication, encryption, Telegram allowlisting, data-minimization, and non-authoritative AI boundaries from the architecture documents.

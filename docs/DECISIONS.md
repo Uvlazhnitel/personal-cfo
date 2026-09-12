@@ -136,15 +136,63 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Context builders, output validation, deterministic fallbacks, prompt-policy versions, and disclosure/audit records are required before enabling AI.
 
+## ADR-012 — Pay-Cycle Sinking Fund Requirements
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Schedule committed Sinking Fund contributions against actual primary-salary Pay Cycles. Protect the outstanding current-cycle requirement in minimum and comfort cash before allocation. Allocation is manual by default, with deterministic `on_primary_income` behavior available only through an explicit per-fund setting.
+
+**Reasoning:** A target that is not yet ring-fenced still competes with investing during the current income cycle. Protecting the due amount closes that gap, while exchanging outstanding due for ring-fenced cash one-for-one prevents double counting.
+
+**Alternatives:** Calendar-month funding is sensitive to salary-date placement. Treating only allocated cash as reserved can recommend investing money needed to keep a committed fund on schedule. Automatic allocation by default makes a user choice without sufficient V1 evidence.
+
+**Consequences:** Pay Cycle and versioned fund-requirement concepts are canonical inputs. Opt-in automatic allocation is audited, ordered deterministically, limited by non-Sinking minimum liquidity, and never moves physical money.
+
+## ADR-013 — Robust Pay-Cycle Investment Step-Up
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Evaluate the latest four complete actual primary-salary Pay Cycles. Use their median capacity, then require the proposed contribution to pass a deterministic 60-day liquidity stress test at 0% market return.
+
+**Reasoning:** Actual salary boundaries remove arbitrary calendar timing. Median resists one legitimate expensive cycle, while the forward test protects against known near-term liquidity risk.
+
+**Alternatives:** Minimum capacity is too sensitive to one outlier. A lower quartile is unstable with four samples and behaves similarly to minimum. Median alone does not account for future obligations.
+
+**Consequences:** Step-Up waits for four complete cycles and reliable data. A candidate is reduced in €50 steps until the forecast stays above minimum cash throughout and ends at or above comfort cash; otherwise the result is hold or Step-Down.
+
+## ADR-014 — Unresolved Transfers Are Quarantined from Meaning
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** A plausible unmatched transfer is `unresolved_transfer`, not income or consumption. Affected flow metrics are partial; a material candidate makes Safe to Invest unavailable and suppresses invest-more recommendations.
+
+**Reasoning:** Treating a delayed bank-to-cash or bank-to-brokerage match as consumption knowingly creates misleading CCR and spending data.
+
+**Alternatives:** Provisional consumption is simple but wrong in common cases. Provisional transfer classification can hide a real external expense.
+
+**Consequences:** Candidates require explicit evidence/status and resolution history. Account balances can remain usable, but metric completeness and recommendation gates must disclose the ambiguity and trigger recalculation after resolution.
+
+## ADR-015 — Cash Reconciliation Uses Audited Adjustments
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** A physical cash count creates a reconciliation record and signed `cash_reconciliation_adjustment`; it never overwrites ledger history. The adjustment is an unexplained Net Worth change, not ordinary income or consumption.
+
+**Reasoning:** Manual cash inevitably drifts. Inventing a normal expense or income would contaminate CCR and the spending baseline, while ignoring the count would overstate available cash.
+
+**Alternatives:** Direct balance overwrite loses provenance. Automatic consumption classification pretends the cause is known. Refusing reconciliation leaves incorrect liquidity.
+
+**Consequences:** The counted balance immediately affects Net Worth, liquidity, and Safe to Invest. Material unexplained variance suppresses invest-more advice. Later resolution must reclassify the adjustment or reverse it before adding a recovered transaction so the balance changes once.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
 | --- | --- | --- | --- |
-| Open Banking provider and history depth | Provider coverage, PSD2 access, stable IDs, pending records, consent renewal, and pricing must be verified for Swedbank Latvia. | Product/engineering | Before Stage 9 |
-| Portfolio tracker contract | API shape, valuation time, holdings, cash inclusion, contribution history, and P/L semantics are unknown. | Product/engineering | Before Stage 8 |
+| Open Banking provider and history depth | Provider coverage, PSD2 access, stable IDs, pending records, consent renewal, and pricing must be verified for Swedbank Latvia. | Product/engineering | Before Stage 8 |
+| Portfolio tracker contract | API shape, valuation time, holdings, cash inclusion, contribution history, and P/L semantics are unknown. | Product/engineering | Before Stage 7 |
 | FX provider and missing-rate policy | Availability, licensing, weekend rates, corrections, and portfolio FX attribution need evaluation. | Product/engineering | Before non-EUR ingestion |
-| Imported-data deletion scope | FRD does not say whether deletion is per record, account, connection, or all data; re-import suppression and audit retention depend on it. | Product | Before Stage 9 |
-| Financial-policy calibration | Reserve months, materiality, Cash Drag threshold, Step-Up cadence, and forecast assumptions are provisional configurable defaults and need synthetic/user validation. | Product | During Stages 3–5 |
+| Imported-data deletion scope | FRD does not say whether deletion is per record, account, connection, or all data; re-import suppression and audit retention depend on it. | Product | Before Stage 8 |
+| Numerical policy calibration | Reserve months, materiality, Cash Drag threshold, recommendation increments, and forecast assumptions remain provisional configurable defaults needing synthetic/user validation. Pay-cycle and Step-Up algorithms are accepted. | Product | During Stages 3–5 |
 | Liabilities and opening balances | V1 may omit liabilities, but Net Worth start-date and historical reconciliation need a chosen cutover policy. | Product | Before Stage 2 completion |
 | AI retention and region | Provider, model, zero-retention availability, data region, and user consent are not selected. | Product/security | Before Stage 11 |
 | Backup objectives | Off-host destination, encryption-key custody, retention, RPO, and RTO depend on the target server and operator. | Operator | Before production data |

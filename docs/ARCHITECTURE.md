@@ -79,13 +79,13 @@ flowchart LR
     RULES --> TG2[Telegram]
 ```
 
-Every stage records its source identifier, processing status, and correlation ID. Normalization is idempotent. A classification correction appends a new classification version and queues recalculation from the earliest affected effective date. Old snapshots remain reproducible and are superseded rather than overwritten.
+Every stage records its source identifier, processing status, and correlation ID. Normalization is idempotent. Plausible transfers that cannot yet be matched enter an explicit review state; they do not flow into authoritative consumption or income. A classification correction, transfer resolution, cash reconciliation, or Sinking Fund allocation change queues recalculation from the earliest affected effective date. Old snapshots remain reproducible and are superseded rather than overwritten.
 
 ## Runtime Responsibilities
 
 ### Web and API
 
-The Next.js application serves the installable PWA and `/api/v1` route handlers. It owns local authentication, request validation, CSRF protection, query responses, and explicit user commands such as recording cash activity, correcting classification, managing Sinking Funds, or accepting a recommendation. Command endpoints require an `Idempotency-Key`; query endpoints are side-effect free.
+The Next.js application serves the installable PWA and `/api/v1` route handlers. It owns local authentication, request validation, CSRF protection, query responses, and explicit user commands such as recording cash activity, reconciling a physical cash count, correcting classification, managing Sinking Funds and their allocation policy, resolving transfer candidates, or accepting a recommendation. Command endpoints require an `Idempotency-Key`; query endpoints are side-effect free.
 
 Public endpoints are limited to liveness/readiness checks and provider OAuth callbacks. OAuth callbacks validate state and PKCE before storing encrypted tokens. Financial endpoints require a server-side session and never expose raw provider payloads.
 
@@ -97,6 +97,8 @@ The worker uses pg-boss in the application PostgreSQL database. Jobs include:
 
 - connection synchronization and pending-to-booked reconciliation;
 - normalization, classification, and transfer matching;
+- primary-pay-cycle detection and closure;
+- opt-in deterministic Sinking Fund allocation;
 - affected-period recalculation and daily snapshots;
 - recurring-transaction and spending-drift detection;
 - recommendation evaluation and restrained notification delivery;
@@ -114,7 +116,7 @@ The Telegram adapter verifies the configured user ID before processing content. 
 
 ### Financial and Recommendation Engines
 
-The financial engine accepts immutable canonical inputs and settings and returns typed results without I/O. It owns all formulas, rounding, missing-data behavior, and explanation components. A separate deterministic recommendation engine consumes those outputs and emits candidates with rule IDs, evidence, severity, and expiry. Neither engine sends messages or writes to the database.
+The financial engine accepts immutable canonical inputs and settings and returns typed results without I/O. It owns all formulas, pay-cycle policy, current-cycle Sinking requirements, rounding, missing-data behavior, and explanation components. A separate deterministic recommendation engine consumes those outputs and emits candidates with rule IDs, evidence, severity, and expiry. Neither engine sends messages, creates allocations, or writes to the database. Application services may turn an opt-in allocation result into an audited command.
 
 ### AI Explanation Layer
 
@@ -128,7 +130,7 @@ Bank, portfolio, FX, Telegram, and AI integrations implement domain ports. Each 
 
 Errors are classified as validation, authentication, transient provider, rate limit, provider contract, conflict/duplicate, or internal invariant failures. Transient failures retry with jitter. Authentication failures disable the connection and request user action. Contract failures quarantine the raw record for review. Invariant failures stop the affected calculation and emit a high-severity operational alert; they never coerce missing values to zero.
 
-Every derived result is `complete`, `partial`, or `unavailable`, with stale sources and missing periods listed. Partial results may be displayed with a warning but cannot produce invest-more recommendations. A failed sync does not erase the last valid snapshot.
+Every derived result is `complete`, `partial`, or `unavailable`, with stale sources, unresolved transfer candidates, material cash variances, and missing periods listed. Partial results may be displayed with a warning but cannot produce invest-more recommendations when the ambiguity is material. A failed sync does not erase the last valid snapshot.
 
 ## Authentication and Security Boundaries
 
