@@ -196,6 +196,13 @@ export function calculateLedgerBalance(input: LedgerBalanceInput): Money {
     );
   }
 
+  if (account.valueSource !== 'ledger') {
+    throw new FinancialEngineInvariantError(
+      'ledger.non_authoritative_balance_source',
+      'Ledger balances are authoritative only for accounts configured with a ledger value source.',
+    );
+  }
+
   const amountMinor = input.ledger.transactions.reduce((balance, transaction) => {
     if (
       transaction.bookingStatus !== 'booked' ||

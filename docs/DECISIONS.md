@@ -164,7 +164,7 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Status:** Accepted — 2026-09-13
 
-**Decision:** A plausible unmatched transfer is `unresolved_transfer`, not income or consumption. Affected flow metrics are partial; a material candidate makes Safe to Invest unavailable and suppresses invest-more recommendations.
+**Decision:** A plausible unmatched transfer is `unresolved_transfer`, not income or consumption. Non-material affected flow metrics are partial; a material candidate makes CCR and Safe to Invest unavailable and suppresses invest-more recommendations.
 
 **Reasoning:** Treating a delayed bank-to-cash or bank-to-brokerage match as consumption knowingly creates misleading CCR and spending data.
 
@@ -195,6 +195,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 **Alternatives:** Making every stale value unavailable discards useful current-state information. Returning a partial subtotal can be mistaken for total wealth. Hardcoding weekdays or 72 hours silently changes the accepted three-market-day policy.
 
 **Consequences:** Net Worth distinguishes stale-known from missing data. Invest-more rules remain suppressed for partial inputs. Later provider and FX work must supply versioned conversion and freshness provenance.
+
+## ADR-017 — Stage 2B CCR Completeness Boundary
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Stage 2B requires explicit canonical EUR economic-flow classifications, complete period coverage, and an explicit short-term-reserve effect. Material classification or transfer ambiguity makes CCR unavailable; non-material ambiguity permits a warned partial value. Linked refunds and reimbursements reduce consumption on their booking date. Unlinked reversals and neutral external flows never become income or silently change consumption. Cash reconciliation adjustments remain outside CCR, with material unexplained variance making the result partial.
+
+**Reasoning:** A confidently wrong income-to-capital ratio is less useful than an unavailable result. Keeping the reservation term explicit prevents Stage 2B from overstating capital creation before Stage 2C supplies allocation facts, while period-local reversals keep the audit trail stable.
+
+**Alternatives:** Defaulting reservation effects to zero hides missing inputs. Treating all ambiguity as partial can present a materially wrong ratio. Backdating refunds silently rewrites previously reported periods.
+
+**Consequences:** Callers must assert complete zero reservation impact when appropriate. Resolution or reclassification recalculates affected periods and rolling windows. This narrows ADR-014 for CCR specifically: its material unresolved-transfer result is unavailable rather than partial.
 
 ## Open Decisions
 

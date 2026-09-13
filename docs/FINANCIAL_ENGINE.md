@@ -114,14 +114,20 @@ It is not the mean of monthly percentages. Current month and rolling 3-, 6-, and
 - A refund is recognized on its booking date; history is not backdated unless the provider corrected the original booking.
 - Spending from savings can produce negative capital created in a later month.
 - Funding a reservation from old savings produces negative capital created at allocation time, making the reclassification visible.
-- Unresolved credits cannot count as income; unresolved material debits make CCR partial.
+- Unresolved credits cannot count as income. Non-material ambiguity makes CCR partial; material ambiguity makes CCR unavailable.
 - A changed classification, fund allocation, refund link, FX rate, or opening boundary recalculates every affected rolling window.
+
+### Stage 2B CCR Boundary
+
+Until Stage 2C supplies Sinking Fund allocation facts, CCR callers must provide an explicit short-term-reserve effect. They may provide a complete zero only when they know that no reservation effect applies; unknown reservation coverage makes CCR unavailable. This preserves the final formula without introducing Sinking Fund models early.
+
+Economic-flow amounts are canonical EUR reporting values. Earned-income meaning is explicit and may be negative only for a booked income correction. `other_external_flow` is disclosed but remains neutral until given a more specific canonical meaning. Linked refunds and reimbursements reduce consumption on their own booking date; unlinked credits reduce nothing and never become income. A material classification or transfer ambiguity makes CCR unavailable, while a non-material ambiguity permits only a warned partial value. Cash reconciliation adjustments remain CCR-neutral; a material unexplained variance makes the otherwise calculated CCR partial.
 
 ## Unresolved Transfer Candidates
 
 A plausible booked bank-to-cash, bank-to-brokerage, or other internal transfer receives the provisional type `unresolved_transfer`. It is displayed separately as under review and is excluded from authoritative consumption and recognized income until confirmed or rejected.
 
-Consumption and CCR for every affected period are `partial`. A material candidate makes Safe to Invest unavailable and suppresses invest-more, Cash Drag, and Step-Up recommendations. A non-material candidate permits a provisional Safe-to-Invest value from reconciled cash balances, but its result remains `partial` with an ambiguity warning. Net Worth may remain complete when authoritative balances on all affected accounts are complete.
+Consumption and CCR for a non-material affected period are `partial`. A material candidate makes CCR and Safe to Invest unavailable and suppresses invest-more, Cash Drag, and Step-Up recommendations. A non-material candidate permits provisional CCR and Safe-to-Invest values from resolved flows and reconciled cash balances, but both remain `partial` with an ambiguity warning. Net Worth may remain complete when authoritative balances on all affected accounts are complete.
 
 Confirmation classifies the linked entries as an internal transfer. Rejection applies the appropriate external-flow classification. Either resolution appends history and recalculates all affected periods and rolling windows.
 

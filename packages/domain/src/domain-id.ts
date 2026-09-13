@@ -10,6 +10,8 @@ export type AccountId = DomainId<'account'>;
 export type TransactionId = DomainId<'transaction'>;
 export type EntryId = DomainId<'entry'>;
 export type FxRateId = DomainId<'fx-rate'>;
+export type EconomicFlowId = DomainId<'economic-flow'>;
+export type CashReconciliationId = DomainId<'cash-reconciliation'>;
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -38,6 +40,14 @@ export function parseEntryId(value: unknown): EntryId {
 
 export function parseFxRateId(value: unknown): FxRateId {
   return parseDomainId(value, 'fx-rate');
+}
+
+export function parseEconomicFlowId(value: unknown): EconomicFlowId {
+  return parseDomainId(value, 'economic-flow');
+}
+
+export function parseCashReconciliationId(value: unknown): CashReconciliationId {
+  return parseDomainId(value, 'cash-reconciliation');
 }
 
 export function serializeDomainId<Entity extends string>(id: DomainId<Entity>): string {

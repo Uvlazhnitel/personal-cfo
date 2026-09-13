@@ -342,6 +342,28 @@ describe('calculateNetWorth', () => {
     );
   });
 
+  it('rejects ledger-balance calculation for non-ledger-authoritative accounts', () => {
+    const bank = account(1, 'bank');
+    const investment = account(3, 'investment');
+    const ledger = validateLedger({
+      accounts: [bank, investment],
+      transactions: [],
+      investmentContributions: [],
+    });
+
+    for (const target of [bank, investment]) {
+      try {
+        calculateLedgerBalance({ ledger, accountId: target.id, asOf: AS_OF });
+        throw new Error('Expected ledger balance invariant failure.');
+      } catch (error) {
+        expect(error).toBeInstanceOf(FinancialEngineInvariantError);
+        expect((error as FinancialEngineInvariantError).code).toBe(
+          'ledger.non_authoritative_balance_source',
+        );
+      }
+    }
+  });
+
   it('ignores an explicitly excluded account and does not require its value', () => {
     const bank = account(1, 'bank');
     const excluded = account(5, 'other_asset', false);
