@@ -244,6 +244,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Baseline results disclose their factor, excluded reversal excess, selected sample window, and deterministic warnings for skipped incomplete and missing-coverage months. Seasonality uses its own latest-24-complete-month selection within the same bound. Changing any policy requires an engine-version change and historical recalculation.
 
+## ADR-021 — Explicit Investability Readiness and Cash Drag Window
+
+**Status:** Accepted — 2026-09-14
+
+**Decision:** Safe to Invest consumes Stage 2D liquidity plus a typed readiness gate that distinguishes complete, approved non-material provisional, and blocked states. Cash Drag evaluates the effective Europe/Riga date plus the preceding 59 local dates; current Stage 2D liquidity is authoritative for the effective date. Only complete daily observations enter the average, which uses one half-even minor-unit division. A partial Safe-to-Invest value cannot make Cash Drag eligible. Stage 2E reports financial eligibility and the current rounded Recommended Safe-to-Invest action cap, but does not implement notification deduplication or cooldowns.
+
+**Reasoning:** Different partial-liquidity causes have different safety consequences and cannot be inferred from human-readable warnings. An explicit current-day authority prevents conflicting snapshots, while local-date windows and exact averaging preserve deterministic persistence evidence.
+
+**Alternatives:** Treating every partial result as investable can expose unsafe advice. Treating all partial results as zero confuses missing information with no surplus. Recomputing historical comfort cash under current settings destroys the meaning of the historical evidence.
+
+**Consequences:** Input assembly must classify investability readiness explicitly and retain each day's authoritative comfort threshold. Historical observations stop before the current effective date. Persistence-backed recommendation lifecycle remains a later-stage responsibility.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

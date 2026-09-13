@@ -282,11 +282,11 @@ The buffer difference is intentional. Comfort cash already preserves one variabi
 
 The result lists liquid cash, ring-fenced funds, uncovered obligations, operational need, reserve target, variability buffer, pending-debit adjustment, and rounding. It recalculates after income, material spending, balances, obligations, reservations, baseline changes, or settings changes.
 
-Safe to Invest is unavailable rather than zero when inputs are incomplete. Zero means a complete calculation found no surplus. The engine never initiates an investment and never treats an expected incoming payment as available cash.
+Safe to Invest receives an explicit machine-readable investability-readiness gate; it never derives safety by parsing warnings. Complete liquidity with complete readiness produces an authoritative result. An explicitly approved non-material transfer ambiguity or cash variance may produce a `partial` result with a provisional value, but that value cannot enable Cash Drag or another invest-more recommendation. Blocking readiness or unavailable liquidity produces `unavailable`, never a numeric zero. Zero means a complete calculation found no surplus. The engine never initiates an investment and never treats an expected incoming payment as available cash.
 
 ## Cash Drag
 
-For each complete daily snapshot:
+The V1 assessment window contains the effective Europe/Riga date and the preceding 59 local calendar dates. Current Stage 2D liquidity is the sole authority for the effective date; supplied historical observations must end before it. For each complete daily observation:
 
 ```text
 daily excess = max(0, liquid cash - comfort cash)
@@ -299,7 +299,9 @@ A Cash Drag recommendation requires all of the following:
 - excess is positive on at least 45 of those 60 calendar days;
 - the average over complete days exceeds `max(€250, 10% of current comfort cash)`.
 
-The recommendation amount is bounded by current recommended Safe to Invest, not the historical average. A notification is suppressed while an equivalent active recommendation exists, after dismissal during its cooldown, or when no action is required. The 60-day window, day counts, threshold, and cooldown are settings.
+Average excess is the sum across complete observations divided by the number of complete observations, rounded once to minor units using half-even division. Missing and incomplete dates are excluded from both numerator and denominator; fewer than 54 complete days produces a partial assessment rather than an authoritative no-action result. The threshold's relative component is also rounded half-even to minor units, and eligibility requires the average to be strictly greater than the effective threshold.
+
+The financial action cap equals current rounded recommended Safe to Invest, not the historical average. Cash Drag remains ineligible when current liquidity or Safe to Invest is partial, even when historical persistence is strong. Stage 2E returns only a financial assessment and suppression reasons. Active-recommendation deduplication, dismissal cooldowns, notifications, and delivery state belong to the later persisted recommendation lifecycle.
 
 ## Investment Step-Up and Step-Down
 
