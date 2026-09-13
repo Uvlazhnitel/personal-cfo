@@ -4,6 +4,7 @@ import {
   EUR,
   createAccount,
   createAccountBalanceSnapshot,
+  createEconomicFlow,
   createExpectedPrimaryPaySchedule,
   createMeasurementPeriod,
   createMoney,
@@ -12,6 +13,8 @@ import {
   createSinkingFund,
   createSinkingFundAllocation,
   parseAccountId,
+  parseCurrencyCode,
+  parseEconomicFlowId,
   parseInstant,
   parseLocalDate,
   parsePayCycleId,
@@ -19,7 +22,12 @@ import {
   parseSinkingFundId,
   parseTransactionId,
 } from '@personal-cfo/domain';
-import type { Instant, SinkingFund, SinkingFundAllocation } from '@personal-cfo/domain';
+import type {
+  EconomicFlow,
+  Instant,
+  SinkingFund,
+  SinkingFundAllocation,
+} from '@personal-cfo/domain';
 
 import {
   FinancialEngineInvariantError,
@@ -94,6 +102,33 @@ function allocation(
   });
 }
 
+function fundedConsumption(
+  seed: number,
+  target: SinkingFund,
+  amountMinor: bigint,
+  effectiveAt: Instant,
+): readonly [SinkingFundAllocation, EconomicFlow] {
+  const transactionId = parseTransactionId(uuid(seed + 100));
+  return [
+    createSinkingFundAllocation({
+      id: parseSinkingFundAllocationId(uuid(seed)),
+      fundId: target.id,
+      amount: createMoney(amountMinor, EUR),
+      effectiveAt,
+      kind: 'funded_consumption',
+      relatedTransactionId: transactionId,
+    }),
+    createEconomicFlow({
+      id: parseEconomicFlowId(uuid(seed + 200)),
+      transactionId,
+      effectiveAt,
+      amount: createMoney(amountMinor, EUR),
+      kind: 'consumption',
+      reimbursable: false,
+    }),
+  ];
+}
+
 function input(
   funds: readonly SinkingFund[],
   allocations: readonly SinkingFundAllocation[] = [],
@@ -102,6 +137,7 @@ function input(
   return {
     funds,
     allocations,
+    economicFlows: [],
     reservationCoverage: COVERAGE,
     payCycles: [CYCLE],
     expectedPrimaryPaySchedule: EXPECTED_PAY,
@@ -148,7 +184,7 @@ describe('Sinking Fund schedules', () => {
     const prior = allocation(30, target, 30_000n, parseInstant('2026-01-10T12:00:00Z'));
     const item = scheduleValue(calculateSinkingFundSchedule(input([target], [prior]))).funds[0]!;
 
-    expect(item.allocated.amountMinor).toBe(30_000n);
+    expect(item.reserved.amountMinor).toBe(30_000n);
     expect(item.currentCycleRequirement?.requiredAmount.amountMinor).toBe(30_000n);
     expect(
       item.currentCycleRequirement!.outstandingAmount.amountMinor +
@@ -175,6 +211,80 @@ describe('Sinking Fund schedules', () => {
     expect(value.funds[0]?.currentCycleRequirement?.outstandingAmount.amountMinor).toBe(0n);
     expect(value.funds[1]?.state).toBe('overfunded');
     expect(value.funds[1]?.excess.amountMinor).toBe(1_000n);
+  });
+
+  it('preserves fully funded targets after reserved cash is partially or fully spent', () => {
+    const partial = fund(20, 60_000n);
+    const full = fund(21, 60_000n);
+    const partialAllocation = allocation(
+      30,
+      partial,
+      60_000n,
+      parseInstant('2026-01-10T12:00:00Z'),
+    );
+    const fullAllocation = allocation(31, full, 60_000n, parseInstant('2026-01-10T12:00:00Z'));
+    const [partialSpend, partialFlow] = fundedConsumption(
+      40,
+      partial,
+      50_000n,
+      parseInstant('2026-01-28T12:00:00Z'),
+    );
+    const [fullSpend, fullFlow] = fundedConsumption(
+      41,
+      full,
+      60_000n,
+      parseInstant('2026-01-28T13:00:00Z'),
+    );
+    const value = scheduleValue(
+      calculateSinkingFundSchedule(
+        input([partial, full], [partialAllocation, fullAllocation, partialSpend, fullSpend], {
+          economicFlows: [partialFlow, fullFlow],
+        }),
+      ),
+    );
+
+    expect(value.funds[0]).toMatchObject({
+      state: 'fully_funded',
+      reserved: { amountMinor: 10_000n },
+      fundedConsumption: { amountMinor: 50_000n },
+      fulfilled: { amountMinor: 60_000n },
+      remaining: { amountMinor: 0n },
+      futureContributions: [],
+    });
+    expect(value.funds[0]?.currentCycleRequirement?.outstandingAmount.amountMinor).toBe(0n);
+    expect(value.funds[1]).toMatchObject({
+      state: 'fully_funded',
+      reserved: { amountMinor: 0n },
+      fundedConsumption: { amountMinor: 60_000n },
+      fulfilled: { amountMinor: 60_000n },
+      remaining: { amountMinor: 0n },
+      futureContributions: [],
+    });
+  });
+
+  it('retains partial target progress after funded consumption', () => {
+    const target = fund(20, 60_000n);
+    const prior = allocation(30, target, 30_000n, parseInstant('2026-01-10T12:00:00Z'));
+    const [spend, flow] = fundedConsumption(
+      40,
+      target,
+      20_000n,
+      parseInstant('2026-01-28T12:00:00Z'),
+    );
+    const item = scheduleValue(
+      calculateSinkingFundSchedule(
+        input([target], [prior, spend], {
+          economicFlows: [flow],
+        }),
+      ),
+    ).funds[0]!;
+
+    expect(item).toMatchObject({
+      reserved: { amountMinor: 10_000n },
+      fundedConsumption: { amountMinor: 20_000n },
+      fulfilled: { amountMinor: 30_000n },
+      remaining: { amountMinor: 30_000n },
+    });
   });
 
   it('does not require salary or expected-pay coverage for an already funded target', () => {
@@ -314,8 +424,60 @@ describe('Sinking Fund allocations and protected cash', () => {
 
     expect(result.value?.byFund[0]).toMatchObject({
       reserved: { amountMinor: 12_000n },
+      fulfilled: { amountMinor: 12_000n },
       outstanding: { amountMinor: 8_000n },
       protected: { amountMinor: 20_000n },
+    });
+  });
+
+  it('does not reopen current-cycle due when reserved cash funds consumption', () => {
+    const target = fund(20, 60_000n);
+    const allocated = allocation(30, target, 20_000n, parseInstant('2026-01-28T08:00:00Z'));
+    const [spent, flow] = fundedConsumption(
+      40,
+      target,
+      10_000n,
+      parseInstant('2026-01-29T08:00:00Z'),
+    );
+    const result = calculateCurrentCycleSinkingDue(
+      input([target], [allocated, spent], { economicFlows: [flow] }),
+    );
+
+    expect(result.value?.byFund[0]).toMatchObject({
+      required: { amountMinor: 20_000n },
+      satisfied: { amountMinor: 20_000n },
+      reserved: { amountMinor: 10_000n },
+      fundedConsumption: { amountMinor: 10_000n },
+      fulfilled: { amountMinor: 20_000n },
+      outstanding: { amountMinor: 0n },
+    });
+  });
+
+  it('restores only released fulfillment after funded consumption', () => {
+    const target = fund(20, 60_000n);
+    const allocated = allocation(30, target, 20_000n, parseInstant('2026-01-28T08:00:00Z'));
+    const [spent, flow] = fundedConsumption(
+      40,
+      target,
+      10_000n,
+      parseInstant('2026-01-29T08:00:00Z'),
+    );
+    const released = allocation(
+      31,
+      target,
+      5_000n,
+      parseInstant('2026-01-30T08:00:00Z'),
+      'release',
+    );
+    const result = calculateCurrentCycleSinkingDue(
+      input([target], [allocated, spent, released], { economicFlows: [flow] }),
+    );
+
+    expect(result.value?.byFund[0]).toMatchObject({
+      reserved: { amountMinor: 5_000n },
+      fundedConsumption: { amountMinor: 10_000n },
+      fulfilled: { amountMinor: 15_000n },
+      outstanding: { amountMinor: 5_000n },
     });
   });
 
@@ -344,6 +506,7 @@ describe('Sinking Fund allocations and protected cash', () => {
     const reserved = calculateReservedCash({
       funds: [target],
       allocations: [event],
+      economicFlows: [],
       reservationCoverage: COVERAGE,
       liquidCash: createMoney(600_000n, EUR),
       asOf: AS_OF,
@@ -391,6 +554,7 @@ describe('Sinking Fund allocations and protected cash', () => {
     const release = allocation(31, target, 1n, parseInstant('2026-01-28T00:00:00Z'), 'release');
     const common = {
       funds: [target],
+      economicFlows: [],
       reservationCoverage: COVERAGE,
       liquidCash: createMoney(5_000n, EUR),
       asOf: AS_OF,
@@ -411,5 +575,27 @@ describe('Sinking Fund allocations and protected cash', () => {
         allocations: [allocation(32, target, 5_001n, parseInstant('2026-01-28T00:00:00Z'))],
       }),
     ).toThrowError(FinancialEngineInvariantError);
+  });
+
+  it('rejects duplicate events, currency mismatches, and retained reserve on inactive funds', () => {
+    const target = fund(20, 60_000n);
+    const event = allocation(30, target, 1_000n, parseInstant('2026-01-28T00:00:00Z'));
+    const wrongCurrency = createSinkingFundAllocation({
+      ...event,
+      id: parseSinkingFundAllocationId(uuid(31)),
+      amount: createMoney(1_000n, parseCurrencyCode('USD')),
+    });
+    const completed = fund(21, 60_000n, '2026-03-27', undefined, { status: 'completed' });
+    const retained = allocation(32, completed, 1_000n, parseInstant('2026-01-28T00:00:00Z'));
+
+    expect(() => calculateSinkingFundSchedule(input([target], [event, event]))).toThrowError(
+      FinancialEngineInvariantError,
+    );
+    expect(() => calculateSinkingFundSchedule(input([target], [wrongCurrency]))).toThrowError(
+      FinancialEngineInvariantError,
+    );
+    expect(() => calculateSinkingFundSchedule(input([completed], [retained]))).toThrowError(
+      FinancialEngineInvariantError,
+    );
   });
 });

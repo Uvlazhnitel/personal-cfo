@@ -83,7 +83,7 @@ If an included account has a known value past its explicit `staleAt`, current Ne
 
 `Net consumption` is external consumption booked in the period, net of linked refunds and reimbursements booked in that period. Asset transfers, investment contributions, cash withdrawals, and reserve allocations are not consumption.
 
-`Short-term reserved funds` are active allocations for future consumption, such as a trip or purchase. The period change is closing allocated balance minus opening allocated balance. Emergency liquidity is long-term retained capital and is not a short-term reservation.
+`Short-term reserved funds` are cash currently ring-fenced for future consumption, such as a trip or purchase. Their balance is allocations minus funded consumption and explicit releases. The period change is the sum of those signed reservation events in the period. Emergency liquidity is long-term retained capital and is not a short-term reservation.
 
 ### Formula and Timing Policy
 
@@ -119,7 +119,7 @@ It is not the mean of monthly percentages. Current month and rolling 3-, 6-, and
 
 ### Reservation Input Boundary
 
-CCR receives immutable Sinking Fund reservation events plus explicit history coverage and derives the short-term-reserve change independently for each measurement period. An empty event set means zero change only when its coverage contains the complete period; missing coverage makes CCR unavailable. Rolling windows never reuse one pre-aggregated reserve value.
+CCR receives canonical Sinking Funds, immutable reservation events, linked consumption facts, and explicit history coverage. One shared validator proves fund identity, creation time, currency, linkage, and a non-negative running reserved balance before deriving the short-term-reserve change independently for each measurement period. An empty event set means zero change only when coverage proves the complete history; missing coverage makes CCR unavailable. Rolling windows never reuse one pre-aggregated reserve value.
 
 Economic-flow amounts are canonical EUR reporting values. Earned-income meaning is explicit and may be negative only for a booked income correction. `other_external_flow` is disclosed but remains neutral until given a more specific canonical meaning. Linked refunds and reimbursements reduce consumption on their own booking date; an unlinked refund or reimbursement requires a matching active ambiguity, reduces nothing, and never becomes income. A material classification or transfer ambiguity makes CCR unavailable, while a non-material ambiguity permits only a warned partial value. Cash reconciliation adjustments remain CCR-neutral; a material unexplained variance makes the otherwise calculated CCR partial.
 
@@ -204,16 +204,19 @@ A Pay Cycle begins at a booked positive transaction explicitly designated as the
 Creating a fund records a target but reserves nothing. An allocation explicitly designates existing liquid cash. When salary opens a Pay Cycle, create a versioned requirement for each committed active fund. Creating or changing a fund mid-cycle creates or supersedes its requirement immediately.
 
 ```text
-allocation before cycle = allocated balance immediately before cycle open
+reserved before requirement = ring-fenced cash immediately before requirement
+funded consumption before requirement = cumulative covered spending before requirement
+fulfilled before requirement = reserved before requirement
+                             + funded consumption before requirement
 future opportunities = expected primary-pay dates after this cycle
                        and on or before the fund due date
 cycle share = ceil_to_minor_unit(
-    max(0, target - allocation before cycle)
+    max(0, target - fulfilled before requirement)
     / (1 + future opportunities)
 )
 current-cycle outstanding = max(
     0,
-    cycle share - net allocation credited during this cycle
+    cycle share - net fulfillment progress during this cycle
 )
 ```
 
@@ -241,9 +244,19 @@ auto-allocatable cash = max(
 
 A partial allocation leaves the rest outstanding and protected by Safe to Invest. Manual allocation may use any otherwise unallocated cash but must warn if it leaves free cash below non-Sinking minimum liquidity.
 
-An allocation cannot exceed eligible liquid cash. Spending linked to the fund lowers cash and allocated balance by the covered amount. Any excess spending is ordinary current-period consumption. A smaller-than-planned purchase leaves the remainder reserved until the user releases, rolls over, or reallocates it.
+An allocation cannot exceed eligible liquid cash. Spending linked to the fund lowers cash and its reserved balance by the covered amount but increases funded consumption to date by the same amount. It therefore preserves target fulfillment and cannot reopen a satisfied current-cycle requirement. Any excess spending is ordinary current-period consumption. A smaller-than-planned purchase leaves the remainder reserved until the user releases, rolls over, or reallocates it.
 
-Reservation events are immutable positive-magnitude `allocation`, `funded_consumption`, or `release` facts. Their reserved-balance deltas are positive, negative, and negative respectively. A funded-consumption event must link to booked consumption at the same instant and cannot cover more than that consumption. Corrections use compensating events. Summing these signed deltas within a start-inclusive/end-exclusive measurement period produces its CCR reservation effect.
+Reservation events are immutable positive-magnitude `allocation`, `funded_consumption`, or `release` facts. Their reserved-balance deltas are positive, negative, and negative respectively; their target-fulfillment deltas are positive, zero, and negative. Consequently:
+
+```text
+reserved balance = allocations - funded consumption - releases
+funded consumption to date = funded-consumption events
+fulfilled amount = reserved balance + funded consumption to date
+remaining to fund = max(0, target - fulfilled amount)
+excess = max(0, fulfilled amount - target)
+```
+
+A funded-consumption event must link to booked consumption at the same instant and cannot exceed either the linked consumption or currently reserved cash. A release likewise cannot exceed currently reserved cash. Events are ordered by effective instant then stable ID, and the running reserved balance must never be negative. Corrections use compensating events. Summing reserved-balance deltas within a start-inclusive/end-exclusive measurement period produces the unchanged CCR reservation effect.
 
 Fund target, due date, allocation, release, and spending-link changes recalculate contribution, liquidity, CCR, Safe to Invest, Cash Drag, and forecasts from their effective dates.
 

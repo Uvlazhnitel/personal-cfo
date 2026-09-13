@@ -9,11 +9,13 @@ import {
   createFlowAmbiguity,
   createMeasurementPeriod,
   createMoney,
+  createSinkingFund,
   createSinkingFundAllocation,
   parseAccountId,
   parseEconomicFlowId,
   parseEntryId,
   parseInstant,
+  parseLocalDate,
   parseSinkingFundAllocationId,
   parseSinkingFundId,
   parseTransactionId,
@@ -63,6 +65,18 @@ const FEBRUARY = period('2026-02-01T00:00:00Z', '2026-03-01T00:00:00Z');
 const MARCH = period('2026-03-01T00:00:00Z', '2026-04-01T00:00:00Z');
 const QUARTER = period('2026-01-01T00:00:00Z', '2026-04-01T00:00:00Z');
 const AS_OF = parseInstant('2026-04-01T00:00:00Z');
+const RESERVATION_HISTORY = period('2025-01-01T00:00:00Z', '2026-04-02T00:00:00Z');
+const sinkingFund = createSinkingFund({
+  id: fundId,
+  label: 'Planned spending',
+  target: createMoney(1_000_000n, EUR),
+  dueDate: parseLocalDate('2027-01-01'),
+  priority: 1,
+  committed: true,
+  status: 'active',
+  allocationPolicy: 'manual',
+  createdAt: RESERVATION_HISTORY.startInclusive,
+});
 
 function period(start: string, end: string): MeasurementPeriod {
   return createMeasurementPeriod({
@@ -144,7 +158,7 @@ function input(
   transactions: readonly CanonicalTransaction[],
   economicFlows: readonly EconomicFlow[],
   allocations: readonly SinkingFundAllocation[],
-  reservationCoverage: MeasurementPeriod = measurementPeriod,
+  reservationCoverage: MeasurementPeriod = RESERVATION_HISTORY,
 ): CapitalConversionInput {
   return {
     accounts: [bank, cash],
@@ -155,6 +169,7 @@ function input(
     ambiguities: [],
     period: measurementPeriod,
     historyCoverage: QUARTER,
+    sinkingFunds: [sinkingFund],
     sinkingFundAllocations: allocations,
     reservationCoverage,
     asOf: AS_OF,
@@ -162,6 +177,24 @@ function input(
     settingsVersion: 'settings-1',
     inputWatermark: 'watermark-1',
   };
+}
+
+function reservationEffect(
+  allocations: readonly SinkingFundAllocation[],
+  economicFlows: readonly EconomicFlow[] = [],
+  funds = [sinkingFund],
+) {
+  return calculateReservationEffect({
+    funds,
+    allocations,
+    reservationCoverage: RESERVATION_HISTORY,
+    period: JANUARY,
+    economicFlows,
+    asOf: AS_OF,
+    engineVersion: '2c.1.0',
+    settingsVersion: 'settings-1',
+    inputWatermark: 'watermark-1',
+  });
 }
 
 describe('reservation accounting in CCR', () => {
@@ -182,12 +215,15 @@ describe('reservation accounting in CCR', () => {
     const at = parseInstant('2026-02-15T12:00:00Z');
     const [salary, salaryFlow] = income(10, 300_000n, at);
     const [trip, tripFlow] = consumption(20, 30_000n, at);
+    const priorAllocation = reservation(29, 30_000n, parseInstant('2026-01-15T12:00:00Z'), {
+      kind: 'allocation',
+    });
     const draw = reservation(30, 30_000n, at, {
       kind: 'funded_consumption',
       relatedTransactionId: trip.id,
     });
     const result = calculateCapitalConversionRate(
-      input(FEBRUARY, [salary, trip], [salaryFlow, tripFlow], [draw]),
+      input(FEBRUARY, [salary, trip], [salaryFlow, tripFlow], [priorAllocation, draw]),
     );
 
     expect(result.value?.netConsumption.amountMinor).toBe(30_000n);
@@ -196,10 +232,13 @@ describe('reservation accounting in CCR', () => {
   });
 
   it('increases capital attribution when a reservation is explicitly released', () => {
+    const allocation = reservation(29, 20_000n, parseInstant('2026-01-15T12:00:00Z'), {
+      kind: 'allocation',
+    });
     const release = reservation(30, 20_000n, parseInstant('2026-02-15T12:00:00Z'), {
       kind: 'release',
     });
-    const result = calculateCapitalCreated(input(FEBRUARY, [], [], [release]));
+    const result = calculateCapitalCreated(input(FEBRUARY, [], [], [allocation, release]));
 
     expect(result.value?.shortTermReservedFundsChange.amountMinor).toBe(-20_000n);
     expect(result.value?.capitalCreated.amountMinor).toBe(20_000n);
@@ -216,7 +255,7 @@ describe('reservation accounting in CCR', () => {
       kind: 'allocation',
     });
     const [salary, salaryFlow] = income(10, 300_000n, parseInstant('2026-03-15T12:00:00Z'));
-    const common = input(QUARTER, [salary], [salaryFlow], [january, february, march], QUARTER);
+    const common = input(QUARTER, [salary], [salaryFlow], [january, february, march]);
     const results = calculateRollingCapitalConversionRates({
       ...common,
       periods: [MARCH, QUARTER],
@@ -243,7 +282,7 @@ describe('reservation accounting in CCR', () => {
     ];
     const [salary, salaryFlow] = income(43, 300_000n, parseInstant('2025-11-15T12:00:00Z'));
     const base = {
-      ...input(twelveMonths, [salary], [salaryFlow], allocations, twelveMonths),
+      ...input(twelveMonths, [salary], [salaryFlow], allocations),
       asOf: twelveMonths.endExclusive,
       historyCoverage: twelveMonths,
     };
@@ -259,8 +298,9 @@ describe('reservation accounting in CCR', () => {
 
   it('treats empty covered reservation history as zero and missing coverage as unavailable', () => {
     const empty = calculateReservationEffect({
+      funds: [],
       allocations: [],
-      reservationCoverage: JANUARY,
+      reservationCoverage: RESERVATION_HISTORY,
       period: JANUARY,
       economicFlows: [],
       asOf: AS_OF,
@@ -286,8 +326,93 @@ describe('reservation accounting in CCR', () => {
     });
 
     expect(() =>
-      calculateCapitalCreated(input(FEBRUARY, [trip], [tripFlow], [tooLarge])),
+      calculateCapitalCreated(
+        input(
+          FEBRUARY,
+          [trip],
+          [tripFlow],
+          [
+            reservation(29, 10_001n, parseInstant('2026-01-15T12:00:00Z'), {
+              kind: 'allocation',
+            }),
+            tooLarge,
+          ],
+        ),
+      ),
     ).toThrowError(FinancialEngineInvariantError);
+  });
+
+  it('rejects events for unknown funds and before fund creation', () => {
+    const at = parseInstant('2026-01-15T12:00:00Z');
+    const valid = reservation(30, 10_000n, at, { kind: 'allocation' });
+    const unknown = createSinkingFundAllocation({
+      ...valid,
+      id: parseSinkingFundAllocationId(uuid(31)),
+      fundId: parseSinkingFundId(uuid(99)),
+    });
+    const beforeCreation = reservation(32, 10_000n, parseInstant('2024-12-31T12:00:00Z'), {
+      kind: 'allocation',
+    });
+
+    expect(() => reservationEffect([unknown])).toThrowError(FinancialEngineInvariantError);
+    expect(() => reservationEffect([beforeCreation])).toThrowError(FinancialEngineInvariantError);
+  });
+
+  it('rejects releases without enough currently reserved cash', () => {
+    const allocation = reservation(30, 10_000n, parseInstant('2026-01-10T12:00:00Z'), {
+      kind: 'allocation',
+    });
+    const releaseWithoutReserve = reservation(31, 10_000n, parseInstant('2026-01-09T12:00:00Z'), {
+      kind: 'release',
+    });
+    const overRelease = reservation(32, 10_001n, parseInstant('2026-01-11T12:00:00Z'), {
+      kind: 'release',
+    });
+
+    expect(() => reservationEffect([releaseWithoutReserve])).toThrowError(
+      FinancialEngineInvariantError,
+    );
+    expect(() => reservationEffect([allocation, overRelease])).toThrowError(
+      FinancialEngineInvariantError,
+    );
+  });
+
+  it('rejects funded consumption without enough currently reserved cash', () => {
+    const at = parseInstant('2026-01-15T12:00:00Z');
+    const [purchase, purchaseFlow] = consumption(60, 10_000n, at);
+    const spending = reservation(30, 10_000n, at, {
+      kind: 'funded_consumption',
+      relatedTransactionId: purchase.id,
+    });
+    const partialAllocation = reservation(31, 5_000n, parseInstant('2026-01-10T12:00:00Z'), {
+      kind: 'allocation',
+    });
+
+    expect(() => reservationEffect([spending], [purchaseFlow])).toThrowError(
+      FinancialEngineInvariantError,
+    );
+    expect(() => reservationEffect([partialAllocation, spending], [purchaseFlow])).toThrowError(
+      FinancialEngineInvariantError,
+    );
+  });
+
+  it('limits release after funded consumption to the remaining reserved cash', () => {
+    const at = parseInstant('2026-01-15T12:00:00Z');
+    const [purchase, purchaseFlow] = consumption(60, 40_000n, at);
+    const allocation = reservation(30, 50_000n, parseInstant('2026-01-10T12:00:00Z'), {
+      kind: 'allocation',
+    });
+    const spending = reservation(31, 40_000n, at, {
+      kind: 'funded_consumption',
+      relatedTransactionId: purchase.id,
+    });
+    const release = reservation(32, 15_000n, parseInstant('2026-01-16T12:00:00Z'), {
+      kind: 'release',
+    });
+
+    expect(() => reservationEffect([allocation, spending, release], [purchaseFlow])).toThrowError(
+      FinancialEngineInvariantError,
+    );
   });
 
   it('does not duplicate reservation effects for a physical internal transfer', () => {

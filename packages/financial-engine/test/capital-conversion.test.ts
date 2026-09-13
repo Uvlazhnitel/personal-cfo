@@ -49,6 +49,10 @@ const AUGUST = createMeasurementPeriod({
   endExclusive: parseInstant('2026-09-01T00:00:00Z'),
 });
 const AS_OF = parseInstant('2026-10-01T00:00:00Z');
+const RESERVATION_COVERAGE = createMeasurementPeriod({
+  startInclusive: SEPTEMBER.startInclusive,
+  endExclusive: parseInstant('2026-10-02T00:00:00Z'),
+});
 const IN_PERIOD = parseInstant('2026-09-15T12:00:00Z');
 
 function uuid(seed: number): string {
@@ -174,8 +178,9 @@ function input(
     ambiguities: [],
     period: SEPTEMBER,
     historyCoverage: SEPTEMBER,
+    sinkingFunds: [],
     sinkingFundAllocations: [],
-    reservationCoverage: SEPTEMBER,
+    reservationCoverage: RESERVATION_COVERAGE,
     asOf: AS_OF,
     engineVersion: '2b.0.0',
     settingsVersion: 'settings-1',
@@ -595,7 +600,7 @@ describe('capital conversion rate', () => {
           }),
           reservationCoverage: createMeasurementPeriod({
             startInclusive: AUGUST.startInclusive,
-            endExclusive: SEPTEMBER.endExclusive,
+            endExclusive: RESERVATION_COVERAGE.endExclusive,
           }),
         },
       ),

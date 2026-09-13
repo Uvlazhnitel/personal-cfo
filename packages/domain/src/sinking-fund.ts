@@ -115,3 +115,13 @@ export function createSinkingFundAllocation(value: SinkingFundAllocation): Sinki
 export function sinkingFundAllocationDelta(value: SinkingFundAllocation): bigint {
   return value.kind === 'allocation' ? value.amount.amountMinor : -value.amount.amountMinor;
 }
+
+export function sinkingFundFulfillmentDelta(value: SinkingFundAllocation): bigint {
+  if (value.kind === 'allocation') return value.amount.amountMinor;
+  if (value.kind === 'release') return -value.amount.amountMinor;
+  return 0n;
+}
+
+export function sinkingFundFundedConsumptionDelta(value: SinkingFundAllocation): bigint {
+  return value.kind === 'funded_consumption' ? value.amount.amountMinor : 0n;
+}

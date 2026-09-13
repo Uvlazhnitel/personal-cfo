@@ -20,6 +20,7 @@ import type {
   MeasurementPeriod,
   MetricResult,
   Money,
+  SinkingFund,
   SinkingFundAllocation,
 } from '@personal-cfo/domain';
 
@@ -67,6 +68,7 @@ export type CapitalConversionInput = LedgerInput &
     ambiguities: readonly FlowAmbiguity[];
     period: MeasurementPeriod;
     historyCoverage: MeasurementPeriod;
+    sinkingFunds: readonly SinkingFund[];
     sinkingFundAllocations: readonly SinkingFundAllocation[];
     reservationCoverage: MeasurementPeriod;
     asOf: Instant;
@@ -376,6 +378,7 @@ function validateInput(input: CapitalConversionInput): ValidatedInput {
   }
 
   const reservationEffect = calculateReservationEffect({
+    funds: input.sinkingFunds,
     allocations: input.sinkingFundAllocations,
     reservationCoverage: input.reservationCoverage,
     period,

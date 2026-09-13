@@ -35,6 +35,10 @@ const PERIOD = createMeasurementPeriod({
   startInclusive: parseInstant('2026-09-01T00:00:00Z'),
   endExclusive: parseInstant('2026-10-01T00:00:00Z'),
 });
+const RESERVATION_COVERAGE = createMeasurementPeriod({
+  startInclusive: PERIOD.startInclusive,
+  endExclusive: parseInstant('2026-10-02T00:00:00Z'),
+});
 
 function uuid(seed: number): string {
   return `01890f3e-7b2c-7${seed.toString(16).padStart(3, '0')}-8abc-${seed
@@ -121,8 +125,9 @@ function input(
     ambiguities: [],
     period: PERIOD,
     historyCoverage: PERIOD,
+    sinkingFunds: [],
     sinkingFundAllocations: [],
-    reservationCoverage: PERIOD,
+    reservationCoverage: RESERVATION_COVERAGE,
     asOf: PERIOD.endExclusive,
     engineVersion: '2b.0.0',
     settingsVersion: 'settings-1',

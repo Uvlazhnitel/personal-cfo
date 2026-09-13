@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   EUR,
+  createEconomicFlow,
   createExpectedPrimaryPaySchedule,
   createMeasurementPeriod,
   createMoney,
@@ -10,6 +11,7 @@ import {
   createSinkingFund,
   createSinkingFundAllocation,
   parseInstant,
+  parseEconomicFlowId,
   parseLocalDate,
   parsePayCycleId,
   parseSinkingFundAllocationId,
@@ -18,6 +20,7 @@ import {
 } from '@personal-cfo/domain';
 import type {
   Instant,
+  EconomicFlow,
   LocalDate,
   MeasurementPeriod,
   SinkingFund,
@@ -83,24 +86,54 @@ function allocation(
   target: SinkingFund,
   amountMinor: bigint,
   effectiveAt: Instant,
+  kind: 'allocation' | 'release' = 'allocation',
 ): SinkingFundAllocation {
   return createSinkingFundAllocation({
     id: parseSinkingFundAllocationId(uuid(seed)),
     fundId: target.id,
     amount: createMoney(amountMinor, EUR),
     effectiveAt,
-    kind: 'allocation',
+    kind,
   });
+}
+
+function fundedConsumption(
+  seed: number,
+  target: SinkingFund,
+  amountMinor: bigint,
+  effectiveAt: Instant,
+): readonly [SinkingFundAllocation, EconomicFlow] {
+  const transactionId = parseTransactionId(uuid(seed + 100));
+  return [
+    createSinkingFundAllocation({
+      id: parseSinkingFundAllocationId(uuid(seed)),
+      fundId: target.id,
+      amount: createMoney(amountMinor, EUR),
+      effectiveAt,
+      kind: 'funded_consumption',
+      relatedTransactionId: transactionId,
+    }),
+    createEconomicFlow({
+      id: parseEconomicFlowId(uuid(seed + 200)),
+      transactionId,
+      effectiveAt,
+      amount: createMoney(amountMinor, EUR),
+      kind: 'consumption',
+      reimbursable: false,
+    }),
+  ];
 }
 
 function scheduleInput(
   target: SinkingFund,
   allocations: readonly SinkingFundAllocation[],
   dates: readonly LocalDate[],
+  economicFlows: readonly EconomicFlow[] = [],
 ): SinkingFundScheduleInput {
   return {
     funds: [target],
     allocations,
+    economicFlows,
     reservationCoverage: COVERAGE,
     payCycles: [CYCLE],
     expectedPrimaryPaySchedule: createExpectedPrimaryPaySchedule({
@@ -171,6 +204,89 @@ describe('Sinking Fund properties', () => {
     );
   });
 
+  it('preserves fulfillment when reserved cash becomes funded consumption', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 1_000_000n }),
+        fc.bigInt({ min: 1n, max: 1_000_000n }),
+        (targetMinor, candidateSpent) => {
+          const allocatedMinor = targetMinor;
+          const spentMinor = candidateSpent > allocatedMinor ? allocatedMinor : candidateSpent;
+          const target = fund(targetMinor, FUTURE_DATES[2]);
+          const allocated = allocation(
+            30,
+            target,
+            allocatedMinor,
+            parseInstant('2026-01-28T00:00:00Z'),
+          );
+          const [spent, flow] = fundedConsumption(
+            31,
+            target,
+            spentMinor,
+            parseInstant('2026-01-29T00:00:00Z'),
+          );
+          const item = calculateSinkingFundSchedule(
+            scheduleInput(target, [allocated, spent], FUTURE_DATES, [flow]),
+          ).value?.funds[0];
+
+          expect(item?.reserved.amountMinor).toBe(allocatedMinor - spentMinor);
+          expect(item?.fundedConsumption.amountMinor).toBe(spentMinor);
+          expect(item?.fulfilled.amountMinor).toBe(allocatedMinor);
+          expect(item?.remaining.amountMinor).toBe(0n);
+        },
+      ),
+      PROPERTY_OPTIONS,
+    );
+  });
+
+  it('reduces fulfillment on release and preserves remaining/excess identities', () => {
+    fc.assert(
+      fc.property(
+        fc.bigInt({ min: 1n, max: 1_000_000n }),
+        fc.bigInt({ min: 0n, max: 1_000_000n }),
+        (targetMinor, candidateRelease) => {
+          const allocatedMinor = targetMinor * 2n;
+          const releaseMinor =
+            candidateRelease > allocatedMinor ? allocatedMinor : candidateRelease;
+          const target = fund(targetMinor, FUTURE_DATES[2]);
+          const allocated = allocation(
+            30,
+            target,
+            allocatedMinor,
+            parseInstant('2026-01-28T00:00:00Z'),
+          );
+          const events =
+            releaseMinor === 0n
+              ? [allocated]
+              : [
+                  allocated,
+                  allocation(
+                    31,
+                    target,
+                    releaseMinor,
+                    parseInstant('2026-01-29T00:00:00Z'),
+                    'release',
+                  ),
+                ];
+          const item = calculateSinkingFundSchedule(scheduleInput(target, events, FUTURE_DATES))
+            .value?.funds[0];
+          if (item === undefined) throw new Error('Expected Sinking Fund progress.');
+          const fulfilled = allocatedMinor - releaseMinor;
+
+          expect(item.fulfilled.amountMinor).toBe(fulfilled);
+          if (fulfilled <= targetMinor) {
+            expect(item.fulfilled.amountMinor + item.remaining.amountMinor).toBe(targetMinor);
+            expect(item.excess.amountMinor).toBe(0n);
+          } else {
+            expect(item.fulfilled.amountMinor).toBe(targetMinor + item.excess.amountMinor);
+            expect(item.remaining.amountMinor).toBe(0n);
+          }
+        },
+      ),
+      PROPERTY_OPTIONS,
+    );
+  });
+
   it('aggregates reservation events exactly across nested periods', () => {
     fc.assert(
       fc.property(
@@ -192,8 +308,9 @@ describe('Sinking Fund properties', () => {
           const quarter = measurement('2026-01-01T00:00:00Z', '2026-04-01T00:00:00Z');
           const calculate = (period: MeasurementPeriod) =>
             calculateReservationEffect({
+              funds: [target],
               allocations: events,
-              reservationCoverage: quarter,
+              reservationCoverage: COVERAGE,
               period,
               economicFlows: [],
               asOf: quarter.endExclusive,

@@ -220,6 +220,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Expected-pay and reservation histories carry completeness coverage. Empty covered history yields zero reserve change; missing coverage makes the result unavailable. Overfunding remains reserved and separately visible until an explicit release, and corrections use compensating immutable events.
 
+## ADR-019 — Validated Reservation Ledger and Fulfillment Projection
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Every reservation calculation uses one canonical history validator over Sinking Funds, reservation events, coverage, as-of time, and linked consumption facts. Events must reference an existing same-currency fund after its creation and, in effective-time then stable-ID order, may never make reserved cash negative. Scheduling projects current reserved cash, funded consumption to date, fulfilled target amount, remaining funding need, and excess separately. Funded consumption moves value from reserved to spent progress without reducing fulfillment; a release reduces both reserved cash and fulfillment.
+
+**Reasoning:** Current ring-fenced cash is not the same as cumulative target progress. Treating funded spending as lost progress reschedules an already funded purchase, while aggregating unvalidated releases can falsely increase capital created.
+
+**Alternatives:** Deriving funding need from current reserved balance loses completed spending progress. Validating only events inside a CCR window cannot prove its opening reserve or prevent impossible releases.
+
+**Consequences:** CCR inputs include the relevant Sinking Funds and complete reservation history, including pre-period events needed to validate opening balances. Funded-consumption and release events remain negative reservation changes for commitment accounting, so the CCR formula and rolling-window behavior do not change.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

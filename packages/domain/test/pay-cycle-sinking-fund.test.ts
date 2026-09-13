@@ -16,6 +16,8 @@ import {
   parseSinkingFundId,
   parseTransactionId,
   sinkingFundAllocationDelta,
+  sinkingFundFulfillmentDelta,
+  sinkingFundFundedConsumptionDelta,
 } from '../src/index.js';
 import type { SinkingFund } from '../src/index.js';
 
@@ -160,6 +162,11 @@ describe('Sinking Fund domain facts', () => {
     expect(sinkingFundAllocationDelta(allocation)).toBe(5_000n);
     expect(sinkingFundAllocationDelta(release)).toBe(-5_000n);
     expect(sinkingFundAllocationDelta(fundedConsumption)).toBe(-5_000n);
+    expect(sinkingFundFulfillmentDelta(allocation)).toBe(5_000n);
+    expect(sinkingFundFulfillmentDelta(release)).toBe(-5_000n);
+    expect(sinkingFundFulfillmentDelta(fundedConsumption)).toBe(0n);
+    expect(sinkingFundFundedConsumptionDelta(allocation)).toBe(0n);
+    expect(sinkingFundFundedConsumptionDelta(fundedConsumption)).toBe(5_000n);
     expect(Object.isFrozen(fundedConsumption)).toBe(true);
     expect(() =>
       createSinkingFundAllocation({

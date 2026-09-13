@@ -14,6 +14,8 @@ import {
   parseLocalDate,
   periodContains,
   sinkingFundAllocationDelta,
+  sinkingFundFulfillmentDelta,
+  sinkingFundFundedConsumptionDelta,
 } from '@personal-cfo/domain';
 import type {
   DataWarning,
@@ -43,7 +45,9 @@ export type SinkingFundRequirement = Readonly<{
   fundId: SinkingFundId;
   payCycleId: PayCycle['id'];
   effectiveAt: Instant;
-  allocationBeforeCycle: Money;
+  reservedBeforeRequirement: Money;
+  fundedConsumptionBeforeRequirement: Money;
+  fulfilledBeforeRequirement: Money;
   remainingFundingOpportunities: number;
   requiredAmount: Money;
   satisfiedAmount: Money;
@@ -59,7 +63,9 @@ export type SinkingFundScheduleItem = Readonly<{
   fundId: SinkingFundId;
   state: 'inactive' | 'funding' | 'fully_funded' | 'overfunded' | 'overdue';
   target: Money;
-  allocated: Money;
+  reserved: Money;
+  fundedConsumption: Money;
+  fulfilled: Money;
   excess: Money;
   remaining: Money;
   currentCycleRequirement: SinkingFundRequirement | null;
@@ -77,6 +83,9 @@ export type CurrentCycleSinkingDueByFund = Readonly<{
   satisfied: Money;
   outstanding: Money;
   reserved: Money;
+  fundedConsumption: Money;
+  fulfilled: Money;
+  remaining: Money;
   excess: Money;
   protected: Money;
 }>;
@@ -93,6 +102,9 @@ export type CurrentCycleSinkingDue = Readonly<{
 export type ReservedCashByFund = Readonly<{
   fundId: SinkingFundId;
   reserved: Money;
+  fundedConsumption: Money;
+  fulfilled: Money;
+  remaining: Money;
   excess: Money;
 }>;
 
@@ -110,6 +122,7 @@ export type ReservationEffect = Readonly<{
 type ReservationHistoryInput = Readonly<{
   funds: readonly SinkingFund[];
   allocations: readonly SinkingFundAllocation[];
+  economicFlows: readonly EconomicFlow[];
   reservationCoverage: MeasurementPeriod;
   asOf: Instant;
 }>;
@@ -128,18 +141,32 @@ export type ReservedCashInput = ReservationHistoryInput &
 
 export type ReservationEffectInput = MetricMetadata &
   Readonly<{
+    funds: readonly SinkingFund[];
     allocations: readonly SinkingFundAllocation[];
     reservationCoverage: MeasurementPeriod;
     period: MeasurementPeriod;
     economicFlows: readonly EconomicFlow[];
   }>;
 
-type CanonicalHistory = Readonly<{
+type ReservationProgressMinor = Readonly<{
+  reserved: bigint;
+  fundedConsumption: bigint;
+  fulfilled: bigint;
+  remaining: bigint;
+  excess: bigint;
+}>;
+
+type ValidatedReservationHistory = Readonly<{
   funds: readonly SinkingFund[];
   allocations: readonly SinkingFundAllocation[];
+  economicFlows: readonly EconomicFlow[];
   coverage: MeasurementPeriod;
   asOf: Instant;
 }>;
+
+type ReservationHistoryValidation =
+  | Readonly<{ status: 'complete'; history: ValidatedReservationHistory }>
+  | Readonly<{ status: 'unavailable'; asOf: Instant }>;
 
 function warning(code: string, context: Readonly<Record<string, string>> = {}): DataWarning {
   return Object.freeze({ code, context: Object.freeze({ ...context }) });
@@ -164,11 +191,69 @@ function requireUnique(values: readonly string[], code: string, message: string)
   }
 }
 
-function canonicalHistory(input: ReservationHistoryInput): CanonicalHistory {
+function validateFundedConsumptionLinks(
+  allocations: readonly SinkingFundAllocation[],
+  economicFlows: readonly EconomicFlow[],
+): void {
+  requireUnique(
+    economicFlows.map((flow) => flow.id),
+    'sinking_fund.duplicate_economic_flow_id',
+    'Economic flow IDs must be unique in reservation history.',
+  );
+  requireUnique(
+    economicFlows.map((flow) => flow.transactionId),
+    'sinking_fund.duplicate_economic_flow_transaction',
+    'A transaction can have only one economic flow in reservation history.',
+  );
+  const byTransaction = new Map(economicFlows.map((flow) => [flow.transactionId, flow]));
+  const covered = new Map<string, bigint>();
+
+  for (const allocation of allocations) {
+    if (allocation.kind !== 'funded_consumption') continue;
+    const flow = byTransaction.get(allocation.relatedTransactionId);
+    if (
+      flow?.kind !== 'consumption' ||
+      flow.effectiveAt !== allocation.effectiveAt ||
+      flow.amount.currency !== allocation.amount.currency
+    ) {
+      throw new FinancialEngineInvariantError(
+        'sinking_fund.invalid_funded_consumption',
+        'Funded consumption must match canonical consumption at the same instant.',
+      );
+    }
+    const total = (covered.get(flow.transactionId) ?? 0n) + allocation.amount.amountMinor;
+    if (total > flow.amount.amountMinor) {
+      throw new FinancialEngineInvariantError(
+        'sinking_fund.coverage_exceeds_consumption',
+        'Sinking Fund coverage cannot exceed linked consumption.',
+      );
+    }
+    covered.set(flow.transactionId, total);
+  }
+}
+
+function historyHasCompleteCoverage(
+  funds: readonly SinkingFund[],
+  coverage: MeasurementPeriod,
+  asOf: Instant,
+): boolean {
+  const earliestCreation = funds
+    .filter((fund) => compareInstants(fund.createdAt, asOf) <= 0)
+    .map((fund) => fund.createdAt)
+    .sort(compareInstants)[0];
+  return (
+    (earliestCreation === undefined ||
+      compareInstants(coverage.startInclusive, earliestCreation) <= 0) &&
+    compareInstants(asOf, coverage.endExclusive) < 0
+  );
+}
+
+function validateReservationHistory(input: ReservationHistoryInput): ReservationHistoryValidation {
   const funds = Object.freeze(input.funds.map((fund) => createSinkingFund(fund)));
   const allocations = Object.freeze(
     input.allocations.map((allocation) => createSinkingFundAllocation(allocation)),
   );
+  const economicFlows = Object.freeze(input.economicFlows.map((flow) => createEconomicFlow(flow)));
   const coverage = createMeasurementPeriod(input.reservationCoverage);
   const asOf = parseInstant(input.asOf);
   const fundsById = new Map(funds.map((fund) => [fund.id, fund]));
@@ -194,10 +279,16 @@ function canonicalHistory(input: ReservationHistoryInput): CanonicalHistory {
   }
   for (const allocation of allocations) {
     const fund = fundsById.get(allocation.fundId);
-    if (fund === undefined || compareInstants(allocation.effectiveAt, fund.createdAt) < 0) {
+    if (fund === undefined) {
       throw new FinancialEngineInvariantError(
-        'sinking_fund.invalid_allocation_fund',
-        'Every allocation must reference an existing fund at or after its creation.',
+        'sinking_fund.unknown_allocation_fund',
+        'Every reservation event must reference an existing Sinking Fund.',
+      );
+    }
+    if (compareInstants(allocation.effectiveAt, fund.createdAt) < 0) {
+      throw new FinancialEngineInvariantError(
+        'sinking_fund.event_before_fund_creation',
+        'A reservation event cannot precede its Sinking Fund creation.',
       );
     }
     if (allocation.amount.currency !== fund.target.currency) {
@@ -207,45 +298,20 @@ function canonicalHistory(input: ReservationHistoryInput): CanonicalHistory {
       );
     }
   }
+  validateFundedConsumptionLinks(allocations, economicFlows);
 
-  return Object.freeze({ funds, allocations, coverage, asOf });
-}
-
-function hasCompleteHistory(history: CanonicalHistory): boolean {
-  const earliestCreation = history.funds
-    .filter((fund) => compareInstants(fund.createdAt, history.asOf) <= 0)
-    .map((fund) => fund.createdAt)
-    .sort(compareInstants)[0];
-  return (
-    (earliestCreation === undefined ||
-      compareInstants(history.coverage.startInclusive, earliestCreation) <= 0) &&
-    compareInstants(history.asOf, history.coverage.endExclusive) < 0
-  );
-}
-
-function allocationBalanceAt(
-  fundId: SinkingFundId,
-  allocations: readonly SinkingFundAllocation[],
-  asOf: Instant,
-  inclusive: boolean,
-): bigint {
-  return allocations.reduce((balance, allocation) => {
-    const comparison = compareInstants(allocation.effectiveAt, asOf);
-    return allocation.fundId === fundId && (comparison < 0 || (inclusive && comparison === 0))
-      ? balance + sinkingFundAllocationDelta(allocation)
-      : balance;
-  }, 0n);
-}
-
-function validateBalances(history: CanonicalHistory): ReadonlyMap<SinkingFundId, bigint> {
   const balances = new Map<SinkingFundId, bigint>();
-  const events = [...history.allocations].sort((left, right) => {
+  if (!historyHasCompleteCoverage(funds, coverage, asOf)) {
+    return Object.freeze({ status: 'unavailable', asOf });
+  }
+
+  const events = [...allocations].sort((left, right) => {
     const byInstant = compareInstants(left.effectiveAt, right.effectiveAt);
     return byInstant !== 0 ? byInstant : left.id.localeCompare(right.id);
   });
 
   for (const event of events) {
-    if (compareInstants(event.effectiveAt, history.asOf) > 0) continue;
+    if (compareInstants(event.effectiveAt, asOf) > 0) continue;
     const balance = (balances.get(event.fundId) ?? 0n) + sinkingFundAllocationDelta(event);
     if (balance < 0n) {
       throw new FinancialEngineInvariantError(
@@ -256,9 +322,9 @@ function validateBalances(history: CanonicalHistory): ReadonlyMap<SinkingFundId,
     balances.set(event.fundId, balance);
   }
 
-  for (const fund of history.funds) {
+  for (const fund of funds) {
     if (
-      compareInstants(fund.createdAt, history.asOf) <= 0 &&
+      compareInstants(fund.createdAt, asOf) <= 0 &&
       fund.status !== 'active' &&
       (balances.get(fund.id) ?? 0n) !== 0n
     ) {
@@ -268,7 +334,34 @@ function validateBalances(history: CanonicalHistory): ReadonlyMap<SinkingFundId,
       );
     }
   }
-  return balances;
+
+  return Object.freeze({
+    status: 'complete',
+    history: Object.freeze({ funds, allocations, economicFlows, coverage, asOf }),
+  });
+}
+
+function reservationProgressAt(
+  history: ValidatedReservationHistory,
+  fund: SinkingFund,
+  instant: Instant,
+  inclusive: boolean,
+): ReservationProgressMinor {
+  let reserved = 0n;
+  let fundedConsumption = 0n;
+  let fulfilled = 0n;
+
+  for (const event of history.allocations) {
+    const comparison = compareInstants(event.effectiveAt, instant);
+    if (event.fundId !== fund.id || comparison > 0 || (!inclusive && comparison === 0)) continue;
+    reserved += sinkingFundAllocationDelta(event);
+    fundedConsumption += sinkingFundFundedConsumptionDelta(event);
+    fulfilled += sinkingFundFulfillmentDelta(event);
+  }
+
+  const remaining = fulfilled < fund.target.amountMinor ? fund.target.amountMinor - fulfilled : 0n;
+  const excess = fulfilled > fund.target.amountMinor ? fulfilled - fund.target.amountMinor : 0n;
+  return Object.freeze({ reserved, fundedConsumption, fulfilled, remaining, excess });
 }
 
 function currentPayCycle(payCycles: readonly PayCycle[], asOf: Instant): PayCycle | undefined {
@@ -324,25 +417,23 @@ function divideExactly(
 
 function scheduleItem(
   fund: SinkingFund,
-  history: CanonicalHistory,
+  history: ValidatedReservationHistory,
   cycle: PayCycle,
   expectedSchedule: ExpectedPrimaryPaySchedule,
   effectiveDate: LocalDate,
 ): SinkingFundScheduleItem {
-  const allocatedMinor = allocationBalanceAt(fund.id, history.allocations, history.asOf, true);
-  const excessMinor =
-    allocatedMinor > fund.target.amountMinor ? allocatedMinor - fund.target.amountMinor : 0n;
-  const remainingMinor =
-    allocatedMinor < fund.target.amountMinor ? fund.target.amountMinor - allocatedMinor : 0n;
+  const current = reservationProgressAt(history, fund, history.asOf, true);
 
   if (!fund.committed || fund.status !== 'active') {
     return Object.freeze({
       fundId: fund.id,
       state: 'inactive',
       target: fund.target,
-      allocated: money(allocatedMinor),
-      excess: money(excessMinor),
-      remaining: money(remainingMinor),
+      reserved: money(current.reserved),
+      fundedConsumption: money(current.fundedConsumption),
+      fulfilled: money(current.fulfilled),
+      excess: money(current.excess),
+      remaining: money(current.remaining),
       currentCycleRequirement: null,
       futureContributions: Object.freeze([]),
     });
@@ -352,45 +443,36 @@ function scheduleItem(
     compareInstants(fund.createdAt, cycle.startInclusive) > 0
       ? fund.createdAt
       : cycle.startInclusive;
-  const allocationBeforeMinor = allocationBalanceAt(
-    fund.id,
-    history.allocations,
-    requirementEffectiveAt,
-    false,
-  );
+  const beforeRequirement = reservationProgressAt(history, fund, requirementEffectiveAt, false);
   const futureDates = expectedSchedule.dates.filter(
     (date) =>
       compareLocalDates(date, effectiveDate) > 0 && compareLocalDates(date, fund.dueDate) <= 0,
   );
-  const remainingAtRequirement =
-    allocationBeforeMinor < fund.target.amountMinor
-      ? fund.target.amountMinor - allocationBeforeMinor
-      : 0n;
   const opportunityCount = BigInt(1 + futureDates.length);
   const requiredMinor =
-    remainingAtRequirement === 0n
+    beforeRequirement.remaining === 0n
       ? 0n
-      : (remainingAtRequirement + opportunityCount - 1n) / opportunityCount;
-  const netCreditedMinor = allocatedMinor - allocationBeforeMinor;
+      : (beforeRequirement.remaining + opportunityCount - 1n) / opportunityCount;
+  const netFulfillmentProgress = current.fulfilled - beforeRequirement.fulfilled;
   const satisfiedMinor =
-    netCreditedMinor <= 0n
+    netFulfillmentProgress <= 0n
       ? 0n
-      : netCreditedMinor > requiredMinor
+      : netFulfillmentProgress > requiredMinor
         ? requiredMinor
-        : netCreditedMinor;
-  const calculatedOutstanding = requiredMinor - netCreditedMinor;
+        : netFulfillmentProgress;
+  const calculatedOutstanding = requiredMinor - netFulfillmentProgress;
   const outstandingMinor =
     calculatedOutstanding <= 0n
       ? 0n
-      : calculatedOutstanding > remainingMinor
-        ? remainingMinor
+      : calculatedOutstanding > current.remaining
+        ? current.remaining
         : calculatedOutstanding;
-  const futureRemainingMinor = remainingMinor - outstandingMinor;
+  const futureRemainingMinor = current.remaining - outstandingMinor;
   const futureContributions = divideExactly(futureRemainingMinor, futureDates);
   const state =
-    excessMinor > 0n
+    current.excess > 0n
       ? 'overfunded'
-      : remainingMinor === 0n
+      : current.remaining === 0n
         ? 'fully_funded'
         : compareLocalDates(fund.dueDate, effectiveDate) < 0
           ? 'overdue'
@@ -400,14 +482,18 @@ function scheduleItem(
     fundId: fund.id,
     state,
     target: fund.target,
-    allocated: money(allocatedMinor),
-    excess: money(excessMinor),
-    remaining: money(remainingMinor),
+    reserved: money(current.reserved),
+    fundedConsumption: money(current.fundedConsumption),
+    fulfilled: money(current.fulfilled),
+    excess: money(current.excess),
+    remaining: money(current.remaining),
     currentCycleRequirement: Object.freeze({
       fundId: fund.id,
       payCycleId: cycle.id,
       effectiveAt: requirementEffectiveAt,
-      allocationBeforeCycle: money(allocationBeforeMinor),
+      reservedBeforeRequirement: money(beforeRequirement.reserved),
+      fundedConsumptionBeforeRequirement: money(beforeRequirement.fundedConsumption),
+      fulfilledBeforeRequirement: money(beforeRequirement.fulfilled),
       remainingFundingOpportunities: futureDates.length,
       requiredAmount: money(requiredMinor),
       satisfiedAmount: money(satisfiedMinor),
@@ -420,15 +506,13 @@ function scheduleItem(
 export function calculateSinkingFundSchedule(
   input: SinkingFundScheduleInput,
 ): MetricResult<SinkingFundSchedule> {
-  const history = canonicalHistory(input);
+  const validation = validateReservationHistory(input);
+  const asOf = validation.status === 'complete' ? validation.history.asOf : validation.asOf;
   const effectiveDate = parseLocalDate(input.effectiveDate);
   const expectedSchedule = createExpectedPrimaryPaySchedule(input.expectedPrimaryPaySchedule);
-  const activeFunds = history.funds.filter(
-    (fund) => compareInstants(fund.createdAt, history.asOf) <= 0,
-  );
-  const base = metadata(input, history.asOf);
+  const base = metadata(input, asOf);
 
-  if (!hasCompleteHistory(history)) {
+  if (validation.status === 'unavailable') {
     return createMetricResult<SinkingFundSchedule>({
       ...base,
       status: 'unavailable',
@@ -437,11 +521,15 @@ export function calculateSinkingFundSchedule(
       warnings: [warning('sinking_fund.missing_allocation_history')],
     });
   }
-  const balances = validateBalances(history);
+
+  const history = validation.history;
+  const activeFunds = history.funds.filter(
+    (fund) => compareInstants(fund.createdAt, history.asOf) <= 0,
+  );
 
   const committed = activeFunds.filter((fund) => fund.committed && fund.status === 'active');
   const needingFunding = committed.filter(
-    (fund) => (balances.get(fund.id) ?? 0n) < fund.target.amountMinor,
+    (fund) => reservationProgressAt(history, fund, history.asOf, true).remaining > 0n,
   );
   if (
     needingFunding.some(
@@ -486,29 +574,22 @@ export function calculateSinkingFundSchedule(
         if (cycle !== undefined) {
           return scheduleItem(fund, history, cycle, expectedSchedule, effectiveDate);
         }
-        const allocatedMinor = allocationBalanceAt(
-          fund.id,
-          history.allocations,
-          history.asOf,
-          true,
-        );
-        const excessMinor =
-          allocatedMinor > fund.target.amountMinor ? allocatedMinor - fund.target.amountMinor : 0n;
-        const remainingMinor =
-          allocatedMinor < fund.target.amountMinor ? fund.target.amountMinor - allocatedMinor : 0n;
+        const current = reservationProgressAt(history, fund, history.asOf, true);
         const state =
           fund.status !== 'active' || !fund.committed
             ? ('inactive' as const)
-            : excessMinor > 0n
+            : current.excess > 0n
               ? ('overfunded' as const)
               : ('fully_funded' as const);
         return Object.freeze({
           fundId: fund.id,
           state,
           target: fund.target,
-          allocated: money(allocatedMinor),
-          excess: money(excessMinor),
-          remaining: money(remainingMinor),
+          reserved: money(current.reserved),
+          fundedConsumption: money(current.fundedConsumption),
+          fulfilled: money(current.fulfilled),
+          excess: money(current.excess),
+          remaining: money(current.remaining),
           currentCycleRequirement: null,
           futureContributions: Object.freeze([]),
         });
@@ -565,9 +646,12 @@ export function calculateCurrentCycleSinkingDue(
         required,
         satisfied,
         outstanding,
-        reserved: item.allocated,
+        reserved: item.reserved,
+        fundedConsumption: item.fundedConsumption,
+        fulfilled: item.fulfilled,
+        remaining: item.remaining,
         excess: item.excess,
-        protected: money(item.allocated.amountMinor + outstanding.amountMinor),
+        protected: money(item.reserved.amountMinor + outstanding.amountMinor),
       });
     }),
   );
@@ -601,8 +685,9 @@ export function calculateCurrentCycleSinkingDue(
 }
 
 export function calculateReservedCash(input: ReservedCashInput): MetricResult<ReservedCash> {
-  const history = canonicalHistory(input);
-  const base = metadata(input, history.asOf);
+  const validation = validateReservationHistory(input);
+  const asOf = validation.status === 'complete' ? validation.history.asOf : validation.asOf;
+  const base = metadata(input, asOf);
   const liquidCash = createMoney(input.liquidCash.amountMinor, input.liquidCash.currency);
   if (liquidCash.currency !== EUR) {
     throw new FinancialEngineInvariantError(
@@ -610,7 +695,7 @@ export function calculateReservedCash(input: ReservedCashInput): MetricResult<Re
       'Stage 2C liquid cash must use EUR.',
     );
   }
-  if (!hasCompleteHistory(history)) {
+  if (validation.status === 'unavailable') {
     return createMetricResult<ReservedCash>({
       ...base,
       status: 'unavailable',
@@ -619,18 +704,19 @@ export function calculateReservedCash(input: ReservedCashInput): MetricResult<Re
       warnings: [warning('sinking_fund.missing_allocation_history')],
     });
   }
-  const balances = validateBalances(history);
+  const history = validation.history;
   const byFund = Object.freeze(
     history.funds
       .filter((fund) => compareInstants(fund.createdAt, history.asOf) <= 0)
       .map((fund) => {
-        const reservedMinor = balances.get(fund.id) ?? 0n;
+        const current = reservationProgressAt(history, fund, history.asOf, true);
         return Object.freeze({
           fundId: fund.id,
-          reserved: money(reservedMinor),
-          excess: money(
-            reservedMinor > fund.target.amountMinor ? reservedMinor - fund.target.amountMinor : 0n,
-          ),
+          reserved: money(current.reserved),
+          fundedConsumption: money(current.fundedConsumption),
+          fulfilled: money(current.fulfilled),
+          remaining: money(current.remaining),
+          excess: money(current.excess),
         });
       }),
   );
@@ -663,60 +749,13 @@ export function calculateReservedCash(input: ReservedCashInput): MetricResult<Re
   });
 }
 
-function validateFundedConsumptionLinks(
-  allocations: readonly SinkingFundAllocation[],
-  economicFlows: readonly EconomicFlow[],
-): void {
-  const flows = economicFlows.map((flow) => createEconomicFlow(flow));
-  const byTransaction = new Map(flows.map((flow) => [flow.transactionId, flow]));
-  const covered = new Map<string, bigint>();
-
-  for (const allocation of allocations) {
-    if (allocation.kind !== 'funded_consumption') continue;
-    const flow = byTransaction.get(allocation.relatedTransactionId);
-    if (
-      flow?.kind !== 'consumption' ||
-      flow.effectiveAt !== allocation.effectiveAt ||
-      flow.amount.currency !== allocation.amount.currency
-    ) {
-      throw new FinancialEngineInvariantError(
-        'sinking_fund.invalid_funded_consumption',
-        'Funded consumption must match booked canonical consumption at the same instant.',
-      );
-    }
-    const total = (covered.get(flow.transactionId) ?? 0n) + allocation.amount.amountMinor;
-    if (total > flow.amount.amountMinor) {
-      throw new FinancialEngineInvariantError(
-        'sinking_fund.coverage_exceeds_consumption',
-        'Sinking Fund coverage cannot exceed linked consumption.',
-      );
-    }
-    covered.set(flow.transactionId, total);
-  }
-}
-
 export function calculateReservationEffect(
   input: ReservationEffectInput,
 ): MetricResult<ReservationEffect> {
-  const allocations = Object.freeze(
-    input.allocations.map((allocation) => createSinkingFundAllocation(allocation)),
-  );
+  const validation = validateReservationHistory(input);
   const period = createMeasurementPeriod(input.period);
-  const coverage = createMeasurementPeriod(input.reservationCoverage);
-  const asOf = parseInstant(input.asOf);
+  const asOf = validation.status === 'complete' ? validation.history.asOf : validation.asOf;
   const base = metadata(input, asOf);
-  requireUnique(
-    allocations.map((allocation) => allocation.id),
-    'sinking_fund.duplicate_allocation_id',
-    'Sinking Fund allocation IDs must be unique.',
-  );
-  if (allocations.some((allocation) => allocation.amount.currency !== EUR)) {
-    throw new FinancialEngineInvariantError(
-      'sinking_fund.reporting_currency_mismatch',
-      'Stage 2C reservation effects must use EUR.',
-    );
-  }
-  validateFundedConsumptionLinks(allocations, input.economicFlows);
 
   if (compareInstants(period.endExclusive, asOf) > 0) {
     throw new FinancialEngineInvariantError(
@@ -724,10 +763,11 @@ export function calculateReservationEffect(
       'A reservation measurement period cannot extend beyond as-of.',
     );
   }
-  const complete =
-    compareInstants(coverage.startInclusive, period.startInclusive) <= 0 &&
-    compareInstants(coverage.endExclusive, period.endExclusive) >= 0;
-  if (!complete) {
+  if (
+    validation.status === 'unavailable' ||
+    compareInstants(validation.history.coverage.startInclusive, period.startInclusive) > 0 ||
+    compareInstants(validation.history.coverage.endExclusive, period.endExclusive) < 0
+  ) {
     return createMetricResult<ReservationEffect>({
       ...base,
       status: 'unavailable',
@@ -737,7 +777,7 @@ export function calculateReservationEffect(
     });
   }
 
-  const changeMinor = allocations.reduce(
+  const changeMinor = validation.history.allocations.reduce(
     (sum, allocation) =>
       periodContains(period, allocation.effectiveAt)
         ? sum + sinkingFundAllocationDelta(allocation)
