@@ -34,6 +34,7 @@ import type { FundedConsumptionCoverage } from './sinking-funds.js';
 export type SpendingBaselineSettings = Readonly<{
   baselineWindowMonths: number;
   minimumCompleteMonths: number;
+  maximumBaselineLookbackMonths: number;
   materialityThreshold: Money;
   variabilityPercentile: ExactFraction;
   seasonalityMinimumMonths: number;
@@ -82,6 +83,17 @@ type MonthlyData = Readonly<{
   reversalExcess: bigint;
 }>;
 
+type CompleteMonthSelection = Readonly<{
+  months: readonly YearMonth[];
+  skippedIncompleteMonths: readonly YearMonth[];
+  missingCoverageMonths: readonly YearMonth[];
+}>;
+
+type WinsorizedOutlier = Readonly<{
+  categoryId: SpendingCategoryId;
+  month: YearMonth;
+}>;
+
 function warning(code: string, context: Readonly<Record<string, string>> = {}): DataWarning {
   return Object.freeze({ code, context: Object.freeze({ ...context }) });
 }
@@ -111,8 +123,12 @@ function validateSettings(settings: SpendingBaselineSettings): SpendingBaselineS
   if (
     !Number.isSafeInteger(settings.baselineWindowMonths) ||
     !Number.isSafeInteger(settings.minimumCompleteMonths) ||
+    !Number.isSafeInteger(settings.maximumBaselineLookbackMonths) ||
     settings.minimumCompleteMonths < 3 ||
     settings.baselineWindowMonths < settings.minimumCompleteMonths ||
+    settings.maximumBaselineLookbackMonths <= 0 ||
+    settings.maximumBaselineLookbackMonths <
+      Math.max(settings.baselineWindowMonths, settings.seasonalityMinimumMonths) ||
     !Number.isSafeInteger(settings.seasonalityMinimumMonths) ||
     settings.seasonalityMinimumMonths < 24 ||
     materialityThreshold.currency !== EUR ||
@@ -172,6 +188,39 @@ function isCompleteMonth(item: CalendarMonthCoverage): boolean {
     item.fxComplete &&
     item.spendingClassificationComplete
   );
+}
+
+function selectLatestCompleteMonths(
+  input: Readonly<{
+    targetMonth: YearMonth;
+    coverageByMonth: ReadonlyMap<YearMonth, CalendarMonthCoverage>;
+    requiredCount: number;
+    maximumLookbackMonths: number;
+  }>,
+): CompleteMonthSelection {
+  const candidates = priorYearMonths(input.targetMonth, input.maximumLookbackMonths);
+  const selected: YearMonth[] = [];
+  const skippedIncompleteMonths: YearMonth[] = [];
+  const missingCoverageMonths: YearMonth[] = [];
+
+  for (let index = candidates.length - 1; index >= 0; index -= 1) {
+    if (selected.length === input.requiredCount) break;
+    const month = candidates[index]!;
+    const coverage = input.coverageByMonth.get(month);
+    if (coverage === undefined) {
+      missingCoverageMonths.push(month);
+    } else if (!isCompleteMonth(coverage)) {
+      skippedIncompleteMonths.push(month);
+    } else {
+      selected.push(month);
+    }
+  }
+
+  return Object.freeze({
+    months: Object.freeze(selected.reverse()),
+    skippedIncompleteMonths: Object.freeze(skippedIncompleteMonths.sort()),
+    missingCoverageMonths: Object.freeze(missingCoverageMonths.sort()),
+  });
 }
 
 function validateFacts(input: SpendingBaselineInput) {
@@ -477,7 +526,7 @@ function categoryEstimates(
   normal: bigint;
   essential: bigint;
   winsorizedMonthlyVariable: ReadonlyMap<YearMonth, bigint>;
-  outlierCount: number;
+  outliers: readonly WinsorizedOutlier[];
 }> {
   const categoryNecessity = new Map<SpendingCategoryId, SpendingObservation['necessity']>();
   for (const item of observations) {
@@ -485,16 +534,16 @@ function categoryEstimates(
   }
   let normal = 0n;
   let essential = 0n;
-  let outlierCount = 0;
+  const outliers: WinsorizedOutlier[] = [];
   const winsorizedMonthlyVariable = new Map(months.map((month) => [month, 0n]));
   for (const [categoryId, necessity] of categoryNecessity) {
     const values = months.map((month) => data.get(month)?.variableByCategory.get(categoryId) ?? 0n);
     const center = median(values);
     const mad = median(values.map((value) => (value >= center ? value - center : center - value)));
     const boundary = center + (3n * mad > materiality ? 3n * mad : materiality);
-    const winsorized = values.map((value) => {
+    const winsorized = values.map((value, index) => {
       if (value > boundary) {
-        outlierCount += 1;
+        outliers.push(Object.freeze({ categoryId, month: months[index]! }));
         return boundary;
       }
       return value;
@@ -509,22 +558,26 @@ function categoryEstimates(
       );
     });
   }
-  return Object.freeze({ normal, essential, winsorizedMonthlyVariable, outlierCount });
+  outliers.sort((left, right) => {
+    const byMonth = left.month.localeCompare(right.month);
+    return byMonth !== 0 ? byMonth : left.categoryId.localeCompare(right.categoryId);
+  });
+  return Object.freeze({
+    normal,
+    essential,
+    winsorizedMonthlyVariable,
+    outliers: Object.freeze(outliers),
+  });
 }
 
 function seasonalFactor(
   targetMonth: YearMonth,
   months: readonly YearMonth[],
-  data: ReadonlyMap<YearMonth, MonthlyData>,
+  winsorizedMonthlyVariable: ReadonlyMap<YearMonth, bigint>,
   cap: ExactFraction,
 ): ExactFraction | null {
   if (months.length === 0) return null;
-  const all = months.map((month) =>
-    [...(data.get(month)?.variableByCategory.values() ?? [])].reduce(
-      (sum, value) => sum + value,
-      0n,
-    ),
-  );
+  const all = months.map((month) => winsorizedMonthlyVariable.get(month) ?? 0n);
   const overall = median(all);
   if (overall === 0n) return null;
   const monthNumber = targetMonth.slice(5, 7);
@@ -578,16 +631,29 @@ export function calculateSpendingBaseline(
     );
   }
   const coverageByMonth = new Map(facts.coverage.map((item) => [item.month, item]));
-  const baselineCandidates = priorYearMonths(targetMonth, settings.baselineWindowMonths);
-  const completeMonths = baselineCandidates.filter((month) => {
-    const item = coverageByMonth.get(month);
-    return item !== undefined && isCompleteMonth(item);
+  const baselineSelection = selectLatestCompleteMonths({
+    targetMonth,
+    coverageByMonth,
+    requiredCount: settings.baselineWindowMonths,
+    maximumLookbackMonths: settings.maximumBaselineLookbackMonths,
   });
-  const incompleteCount = baselineCandidates.length - completeMonths.length;
-  if (incompleteCount > 0)
+  const completeMonths = baselineSelection.months;
+  if (baselineSelection.skippedIncompleteMonths.length > 0) {
     warnings.push(
-      warning('baseline.incomplete_months_excluded', { count: incompleteCount.toString() }),
+      warning('baseline.incomplete_months_skipped', {
+        count: baselineSelection.skippedIncompleteMonths.length.toString(),
+        months: baselineSelection.skippedIncompleteMonths.join(','),
+      }),
     );
+  }
+  if (baselineSelection.missingCoverageMonths.length > 0) {
+    warnings.push(
+      warning('baseline.missing_month_coverage', {
+        count: baselineSelection.missingCoverageMonths.length.toString(),
+        months: baselineSelection.missingCoverageMonths.join(','),
+      }),
+    );
+  }
 
   const recurring = facts.scheduled.filter((item) => yearMonthOf(item.dueDate) === targetMonth);
   for (const item of recurring) {
@@ -609,6 +675,7 @@ export function calculateSpendingBaseline(
     warnings.push(
       warning('baseline.insufficient_history', {
         completeMonths: completeMonths.length.toString(),
+        maximumLookbackMonths: settings.maximumBaselineLookbackMonths.toString(),
       }),
     );
     warnings.push(warning('baseline.insufficient_variability_sample'));
@@ -669,28 +736,42 @@ export function calculateSpendingBaseline(
     facts.observations,
     settings.materialityThreshold.amountMinor,
   );
-  if (estimates.outlierCount > 0)
-    warnings.push(
-      warning('baseline.high_outliers_winsorized', { count: estimates.outlierCount.toString() }),
-    );
-
-  const seasonalCandidates = priorYearMonths(targetMonth, settings.seasonalityMinimumMonths);
-  const seasonalMonths = seasonalCandidates.filter((month) => {
-    const item = coverageByMonth.get(month);
-    return item !== undefined && isCompleteMonth(item);
+  const seasonalSelection = selectLatestCompleteMonths({
+    targetMonth,
+    coverageByMonth,
+    requiredCount: settings.seasonalityMinimumMonths,
+    maximumLookbackMonths: settings.maximumBaselineLookbackMonths,
   });
+  const seasonalMonths = seasonalSelection.months;
   let factor: ExactFraction | null = null;
-  if (
-    seasonalCandidates.length === settings.seasonalityMinimumMonths &&
-    seasonalMonths.length === settings.seasonalityMinimumMonths
-  ) {
+  let seasonalOutliers: readonly WinsorizedOutlier[] = [];
+  if (seasonalMonths.length === settings.seasonalityMinimumMonths) {
+    const seasonalMonthly = collectMonthlyData(seasonalMonths, facts, funded);
+    const seasonalEstimates = categoryEstimates(
+      seasonalMonths,
+      seasonalMonthly,
+      facts.observations,
+      settings.materialityThreshold.amountMinor,
+    );
+    seasonalOutliers = seasonalEstimates.outliers;
     factor = seasonalFactor(
       targetMonth,
       seasonalMonths,
-      collectMonthlyData(seasonalMonths, facts, funded),
+      seasonalEstimates.winsorizedMonthlyVariable,
       settings.seasonalityCap,
     );
     if (factor === null) warnings.push(warning('baseline.seasonality_zero_reference'));
+  }
+  const outlierKeys = new Set(
+    [...estimates.outliers, ...seasonalOutliers].map((item) => `${item.month}:${item.categoryId}`),
+  );
+  if (outlierKeys.size > 0) {
+    warnings.push(
+      warning('baseline.high_outliers_winsorized', {
+        count: outlierKeys.size.toString(),
+        observations: [...outlierKeys].sort().join(','),
+      }),
+    );
   }
   const variableNormal =
     factor === null

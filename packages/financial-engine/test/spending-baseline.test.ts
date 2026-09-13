@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import fc from 'fast-check';
 
 import {
   EUR,
@@ -60,6 +61,7 @@ function settings(overrides: Partial<SpendingBaselineSettings> = {}): SpendingBa
   return {
     baselineWindowMonths: 6,
     minimumCompleteMonths: 3,
+    maximumBaselineLookbackMonths: 36,
     materialityThreshold: createMoney(5_000n, EUR),
     variabilityPercentile: createExactFraction(4n, 5n),
     seasonalityMinimumMonths: 24,
@@ -430,6 +432,61 @@ describe('spending baseline', () => {
     expect(baseline.variabilityBuffer.amountMinor).toBe(0n);
   });
 
+  it('selects the latest six complete months across an interspersed incomplete month', () => {
+    const selected = ['2025-12', '2026-01', '2026-02', '2026-03', '2026-05', '2026-06'];
+    const items = selected.map((month, index) => consumption(600 + index, `${month}-10`, 10_000n));
+    const incompleteApril = createCalendarMonthCoverage({
+      month: parseYearMonth('2026-04'),
+      reconciled: false,
+      materialAmbiguityFree: true,
+      fxComplete: true,
+      spendingClassificationComplete: true,
+    });
+    const result = calculateSpendingBaseline(
+      input(
+        items.map((item) => item.flow),
+        items.map((item) => item.observation),
+        { monthCoverage: [...completeMonths(selected), incompleteApril] },
+      ),
+    );
+    const reordered = calculateSpendingBaseline(
+      input(
+        items.map((item) => item.flow).reverse(),
+        items.map((item) => item.observation).reverse(),
+        { monthCoverage: [incompleteApril, ...completeMonths(selected).reverse()] },
+      ),
+    );
+
+    expect(value(result).historicalWindowUsed).toEqual(selected);
+    expect(value(result).source).toBe('historical');
+    expect(reordered.value).toEqual(result.value);
+    expect(reordered.warnings).toEqual(result.warnings);
+    expect(
+      result.warnings.filter((item) => item.code === 'baseline.incomplete_months_skipped'),
+    ).toEqual([expect.objectContaining({ context: { count: '1', months: '2026-04' } })]);
+  });
+
+  it('continues through the 36-month lookback to avoid an unnecessary fallback', () => {
+    const selected = ['2025-08', '2025-12', '2026-02', '2026-05', '2026-06'];
+    const items = selected.map((month, index) => consumption(620 + index, `${month}-10`, 10_000n));
+    const result = calculateSpendingBaseline(
+      input(
+        items.map((item) => item.flow),
+        items.map((item) => item.observation),
+        { monthCoverage: completeMonths(selected), scheduledRecurring: [] },
+      ),
+    );
+
+    expect(value(result).source).toBe('historical');
+    expect(value(result).historicalWindowUsed).toEqual(selected);
+    expect(result.warnings.some((item) => item.code === 'baseline.insufficient_history')).toBe(
+      false,
+    );
+    expect(
+      result.warnings.filter((item) => item.code === 'baseline.missing_month_coverage'),
+    ).toHaveLength(1);
+  });
+
   it('excludes incomplete months instead of interpreting them as zero', () => {
     const items = ['2026-01-10', '2026-02-10', '2026-03-10', '2026-04-10'].map((date, index) =>
       consumption(160 + index, date, index === 3 ? 100_000n : 10_000n),
@@ -450,9 +507,9 @@ describe('spending baseline', () => {
       ),
     );
     expect(value(result).variableNormal.amountMinor).toBe(10_000n);
-    expect(
-      result.warnings.some((item) => item.code === 'baseline.incomplete_months_excluded'),
-    ).toBe(true);
+    expect(result.warnings.some((item) => item.code === 'baseline.incomplete_months_skipped')).toBe(
+      true,
+    );
   });
 
   it('preserves exact bigint amounts above the JavaScript safe-integer range', () => {
@@ -556,6 +613,108 @@ describe('spending baseline', () => {
     expect(baseline.seasonalAdjustment).toBeNull();
   });
 
+  it('enables seasonality with 24 complete months around an interspersed incomplete month', () => {
+    const months: string[] = [];
+    const items: ReturnType<typeof consumption>[] = [];
+    let seed = 700;
+    for (let year = 2023; year <= 2025; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        const ym = `${year}-${month.toString().padStart(2, '0')}`;
+        if (ym < '2023-12' || ym === '2025-06') continue;
+        months.push(ym);
+        items.push(consumption(seed, `${ym}-10`, 10_000n));
+        seed += 1;
+      }
+    }
+    const incompleteJune = createCalendarMonthCoverage({
+      month: parseYearMonth('2025-06'),
+      reconciled: true,
+      materialAmbiguityFree: false,
+      fxComplete: true,
+      spendingClassificationComplete: true,
+    });
+    const baseline = value(
+      calculateSpendingBaseline(
+        input(
+          items.map((item) => item.flow),
+          items.map((item) => item.observation),
+          {
+            targetMonth: parseYearMonth('2026-01'),
+            monthCoverage: [...completeMonths(months), incompleteJune],
+            scheduledRecurring: [],
+          },
+        ),
+      ),
+    );
+
+    expect(months).toHaveLength(24);
+    expect(baseline.seasonalAdjustment).toEqual({ numerator: 10_000n, denominator: 10_000n });
+  });
+
+  it('winsorizes an extreme target-month observation before seasonal comparison', () => {
+    const months: string[] = [];
+    const items: ReturnType<typeof consumption>[] = [];
+    let seed = 750;
+    for (let year = 2024; year <= 2025; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        const ym = `${year}-${month.toString().padStart(2, '0')}`;
+        months.push(ym);
+        items.push(
+          consumption(seed, `${ym}-10`, year === 2025 && month === 1 ? 100_000n : 10_000n),
+        );
+        seed += 1;
+      }
+    }
+    const baseline = value(
+      calculateSpendingBaseline(
+        input(
+          items.map((item) => item.flow),
+          items.map((item) => item.observation),
+          {
+            targetMonth: parseYearMonth('2026-01'),
+            monthCoverage: completeMonths(months),
+            scheduledRecurring: [],
+            settings: settings({ materialityThreshold: createMoney(1_000n, EUR) }),
+          },
+        ),
+      ),
+    );
+
+    expect(baseline.seasonalAdjustment).toEqual({ numerator: 10_500n, denominator: 10_000n });
+    expect(baseline.variableNormal.amountMinor).toBe(10_500n);
+  });
+
+  it('keeps zero-reference seasonality disabled with an explicit warning', () => {
+    const months: string[] = [];
+    for (let year = 2024; year <= 2025; year += 1) {
+      for (let month = 1; month <= 12; month += 1) {
+        months.push(`${year}-${month.toString().padStart(2, '0')}`);
+      }
+    }
+    const result = calculateSpendingBaseline(
+      input([], [], {
+        targetMonth: parseYearMonth('2026-01'),
+        monthCoverage: completeMonths(months),
+        scheduledRecurring: [],
+      }),
+    );
+
+    expect(value(result).seasonalAdjustment).toBeNull();
+    expect(
+      result.warnings.some((item) => item.code === 'baseline.seasonality_zero_reference'),
+    ).toBe(true);
+  });
+
+  it('rejects a lookback shorter than the baseline or seasonality requirement', () => {
+    expect(() =>
+      calculateSpendingBaseline(
+        input([], [], {
+          settings: settings({ maximumBaselineLookbackMonths: 23 }),
+        }),
+      ),
+    ).toThrow('Spending baseline settings violate the accepted Stage 2D policy.');
+  });
+
   it('caps a low seasonal factor at -20%', () => {
     const months: string[] = [];
     const items: ReturnType<typeof consumption>[] = [];
@@ -583,5 +742,42 @@ describe('spending baseline', () => {
     );
     expect(baseline.seasonalAdjustment).toEqual({ numerator: 4n, denominator: 5n });
     expect(baseline.variableNormal.amountMinor).toBe(8_000n);
+  });
+
+  it('ignores incomplete-month insertion and spending when enough complete history remains', () => {
+    const selected = ['2025-12', '2026-01', '2026-02', '2026-03', '2026-05', '2026-06'];
+    const stable = selected.map((month, index) =>
+      consumption(820 + index, `${month}-10`, 10_000n + BigInt(index) * 1_000n),
+    );
+    const incompleteApril = createCalendarMonthCoverage({
+      month: parseYearMonth('2026-04'),
+      reconciled: false,
+      materialAmbiguityFree: true,
+      fxComplete: true,
+      spendingClassificationComplete: true,
+    });
+
+    fc.assert(
+      fc.property(fc.bigInt({ min: 1n, max: 1_000_000n }), (incompleteAmount) => {
+        const ignored = consumption(840, '2026-04-10', incompleteAmount);
+        const withoutSpending = calculateSpendingBaseline(
+          input(
+            stable.map((item) => item.flow),
+            stable.map((item) => item.observation),
+            { monthCoverage: [...completeMonths(selected), incompleteApril] },
+          ),
+        );
+        const withSpending = calculateSpendingBaseline(
+          input(
+            [...stable.map((item) => item.flow), ignored.flow],
+            [...stable.map((item) => item.observation), ignored.observation],
+            { monthCoverage: [...completeMonths(selected), incompleteApril] },
+          ),
+        );
+
+        expect(withSpending.value).toEqual(withoutSpending.value);
+      }),
+      { seed: 2_026_024, numRuns: 100 },
+    );
   });
 });
