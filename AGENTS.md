@@ -31,7 +31,7 @@ Dependencies point inward: delivery and adapters may depend on domain interfaces
 
 ## Development and Testing
 
-Use Node.js 24 and pnpm 11.19.0. Install with `pnpm install --frozen-lockfile`. Run `pnpm lint` for source and package-boundary checks, `pnpm typecheck` for strict TypeScript, `pnpm test` for Vitest, and `pnpm format:check` before submitting. Use `pnpm format` to apply formatting and `pnpm test:coverage` when measuring coverage.
+Use Node.js 24 and pnpm 11.19.0. Install with `pnpm install --frozen-lockfile`. Run `pnpm lint` for source and package-boundary checks, `pnpm typecheck` for strict TypeScript, `pnpm test` for Vitest, and `pnpm format:check` before submitting. Use `pnpm format` to apply formatting and `pnpm test:coverage` when measuring coverage. Build runtime shells with `pnpm build`; use `pnpm dev:web` or `pnpm dev:worker` locally. `docker compose up --build` exposes only Caddy at `127.0.0.1:8080`; PostgreSQL remains internal.
 
 Use strict TypeScript. Store money as integer minor units using `bigint`; serialize it as strings and never use JavaScript floating point in financial paths. Keep critical functions pure and pass time, settings, and inputs explicitly.
 

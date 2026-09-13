@@ -9,8 +9,13 @@
     "pnpm": "11.19.0"
   },
   "scripts": {
+    "build": "pnpm build:web && pnpm build:worker",
+    "build:web": "pnpm --filter @personal-cfo/web run build",
+    "build:worker": "pnpm --filter @personal-cfo/worker run build",
+    "dev:web": "pnpm --filter @personal-cfo/web run dev",
+    "dev:worker": "pnpm --filter @personal-cfo/worker run dev",
     "lint": "eslint . && node scripts/check-package-boundaries.mjs",
-    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --if-present run typecheck",
     "test": "vitest run",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

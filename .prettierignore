@@ -3,3 +3,6 @@ pnpm-lock.yaml
 node_modules/
 coverage/
 dist/
+**/.next/**
+# Generated and rewritten by Next.js during builds.
+apps/web/next-env.d.ts
