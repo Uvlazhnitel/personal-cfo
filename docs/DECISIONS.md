@@ -184,6 +184,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** The counted balance immediately affects Net Worth, liquidity, and Safe to Invest. Material unexplained variance suppresses invest-more advice. Later resolution must reclassify the adjustment or reverse it before adding a recovered transaction so the balance changes once.
 
+## ADR-016 — Net Worth Freshness and Missing Values
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Current Net Worth may use a known value past its explicit `staleAt`, but the result is `partial` and carries a source warning. A missing required value or missing EUR conversion makes Net Worth `unavailable`; the engine never presents a known-component subtotal as Net Worth. Each input supplies `sourceAsOf` and `staleAt`; the assembler derives the deadline from effective settings and any applicable market calendar.
+
+**Reasoning:** A last known value remains useful when visibly qualified, while a value that never existed cannot be replaced with zero. An explicit deadline keeps the engine deterministic without embedding an incomplete market-holiday calendar.
+
+**Alternatives:** Making every stale value unavailable discards useful current-state information. Returning a partial subtotal can be mistaken for total wealth. Hardcoding weekdays or 72 hours silently changes the accepted three-market-day policy.
+
+**Consequences:** Net Worth distinguishes stale-known from missing data. Invest-more rules remain suppressed for partial inputs. Later provider and FX work must supply versioned conversion and freshness provenance.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

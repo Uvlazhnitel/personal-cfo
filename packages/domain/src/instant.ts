@@ -41,3 +41,17 @@ export function parseInstant(value: unknown): Instant {
 export function serializeInstant(instant: Instant): string {
   return instant;
 }
+
+function instantSortKey(instant: Instant): string {
+  const [dateAndTime = '', fractionAndZone = ''] = instant.slice(0, -1).split('.');
+  return `${dateAndTime.replace(/[-:T]/gu, '')}${fractionAndZone.padEnd(6, '0')}`;
+}
+
+export function compareInstants(left: Instant, right: Instant): -1 | 0 | 1 {
+  const leftKey = instantSortKey(left);
+  const rightKey = instantSortKey(right);
+
+  if (leftKey < rightKey) return -1;
+  if (leftKey > rightKey) return 1;
+  return 0;
+}

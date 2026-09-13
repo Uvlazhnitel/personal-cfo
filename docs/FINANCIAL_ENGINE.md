@@ -36,7 +36,7 @@ Inputs are immutable canonical domain values. Output explanation components cont
 - Instants are UTC. Daily and monthly periods close in `Europe/Riga`, including daylight-saving transitions.
 - Only booked activity enters authoritative historical metrics. Pending debits may reduce prospective liquidity; pending credits never increase investable money.
 - Calculations carry `complete`, `partial`, or `unavailable`. An invest-more or Step-Up recommendation requires complete inputs.
-- Material stale data makes dependent metrics unavailable by default: bank/cash balance older than 3 days, portfolio value older than 3 market days, or an unresolved transaction greater than `max(€100, 2% of rolling monthly recognized income)`. These thresholds are settings.
+- Material stale data makes dependent metrics unavailable by default unless a metric-specific rule permits a provisional value. Current Net Worth is the explicit exception below. Default thresholds remain 3 days for bank/cash balances, 3 market days for portfolio values, and `max(€100, 2% of rolling monthly recognized income)` for unresolved transactions. These thresholds are settings.
 - Plausible unresolved transfers and unexplained cash variances follow their explicit policies below. They are never silently coerced into income or consumption to make a metric complete.
 
 ## Net Worth and Capital Attribution
@@ -73,7 +73,7 @@ The FX term is zero for an all-EUR portfolio. A provider-reported P/L is reconci
 - Brokerage cash is represented inside the portfolio total or as a separate account, never both.
 - Opening balances establish the start of a measurable history and are not capital created.
 
-If any material account is stale or missing, current Net Worth is partial and no invest-more recommendation is emitted. Period return is unavailable unless both boundary values and intervening flows are complete. Daily snapshots are calculated after the local day closes and on material balance or valuation changes. Corrections recalculate from the earliest affected boundary forward.
+If an included account has a known value past its explicit `staleAt`, current Net Worth includes that last known value and is `partial`; no invest-more recommendation is emitted. A missing required value or missing EUR conversion makes Net Worth `unavailable`, never a partial subtotal. The input assembler derives `staleAt` from the effective settings and applicable market calendar, and the pure engine only compares it with the supplied calculation time. Period return is unavailable unless both boundary values and intervening flows are complete. Daily snapshots are calculated after the local day closes and on material balance or valuation changes. Corrections recalculate from the earliest affected boundary forward.
 
 ## Capital Conversion Rate
 
