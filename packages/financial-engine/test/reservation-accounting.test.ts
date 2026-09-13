@@ -32,6 +32,7 @@ import {
   FinancialEngineInvariantError,
   calculateCapitalConversionRate,
   calculateCapitalCreated,
+  calculateFundedConsumptionCoverage,
   calculateReservationEffect,
   calculateRollingCapitalConversionRates,
 } from '../src/index.js';
@@ -198,6 +199,33 @@ function reservationEffect(
 }
 
 describe('reservation accounting in CCR', () => {
+  it('projects funded consumption through the validated reservation ledger', () => {
+    const at = parseInstant('2026-02-15T12:00:00Z');
+    const [trip, tripFlow] = consumption(20, 8_000n, at);
+    const prior = reservation(29, 8_000n, parseInstant('2026-01-15T12:00:00Z'), {
+      kind: 'allocation',
+    });
+    const draw = reservation(30, 8_000n, at, {
+      kind: 'funded_consumption',
+      relatedTransactionId: trip.id,
+    });
+    const result = calculateFundedConsumptionCoverage({
+      funds: [sinkingFund],
+      allocations: [prior, draw],
+      economicFlows: [tripFlow],
+      reservationCoverage: RESERVATION_HISTORY,
+      asOf: AS_OF,
+      engineVersion: '2d.0.0',
+      settingsVersion: 'settings-1',
+      inputWatermark: 'watermark-1',
+    });
+
+    expect(result.status).toBe('complete');
+    expect(result.value?.byTransaction).toEqual([
+      { transactionId: trip.id, amount: createMoney(8_000n, EUR) },
+    ]);
+  });
+
   it('reduces capital created when future-consumption cash is reserved', () => {
     const at = parseInstant('2026-01-15T12:00:00Z');
     const [salary, salaryFlow] = income(10, 300_000n, at);

@@ -149,11 +149,13 @@ Use the latest six complete calendar months. At least three complete months are 
 
 For each month, exclude transfers, investment flows, opening balances, Sinking Fund allocations, and user-confirmed irregular events. Linked refunds reduce the relevant variable category. Remove recurring transactions from variable totals. For each category, take the median monthly variable total. Values above `median + max(3 × MAD, materiality threshold)` are flagged for review and winsorized to that boundary unless already marked irregular. A single unusually low month remains in the sample; the median prevents it from dominating.
 
-After 24 complete months, an optional seasonal factor compares the same calendar month with the overall median. Cap the factor to ±20% and disclose it. Until then, no seasonality is inferred.
+Category samples include a zero for every complete month without eligible spending in that category. Even-sized medians and MAD medians use half-even minor-unit rounding. Linked refunds and reimbursements reduce the original variable category in their own booking month; a category-month is floored at zero and any excess reversal is disclosed rather than converted into negative spending. Funded Sinking consumption is excluded only up to its validated covered amount, leaving any unfunded remainder as ordinary consumption.
+
+After 24 complete months, an optional seasonal factor compares the median normal-variable spending for the target calendar month with the overall normal-variable median. Cap the factor to ±20%, apply it only to the normal and essential variable estimates, and disclose it as an exact fraction. The explicit next-period recurring schedule is not adjusted. A zero overall variable median disables the factor with a warning. Until 24 complete months exist, no seasonality is inferred.
 
 ### Outputs and Behavior
 
-Return recurring, variable, essential, normal, variability-buffer, excluded-irregular, and completeness components. The variability buffer is the 80th percentile positive deviation of eligible monthly normal spending above its median; with insufficient samples it is zero and flagged.
+Return recurring, variable, essential, normal, variability-buffer, excluded-irregular, and completeness components. The variability buffer is the nearest-rank 80th percentile of positive deviations of eligible monthly normal spending above its median. Three complete monthly observations are sufficient. No positive deviations is an observed zero; fewer than three observations produces zero with an explicit insufficient-sample warning.
 
 Recalculate after a completed month, recurring-series change, irregular flag, refund link, or historical classification correction. Never use machine learning for the authoritative V1 baseline.
 
@@ -192,6 +194,8 @@ free liquid cash = liquid cash - ring-fenced
 Using `max` prevents current-cycle operating costs from being added again when the reserve target already covers them. An obligation linked to an active Sinking Fund is represented by its allocated balance plus current-cycle due, not by adding the full future obligation again. An obligation in the operational forecast is likewise not repeated as uncovered.
 
 Pending debits increase operational need; pending credits do not reduce it. If the next income date is unknown, use 31 days and mark partial. If liquid balances, baseline, obligations, or reservation coverage are materially incomplete, the reserve is partial and Safe to Invest is unavailable.
+
+The operational interval is start-inclusive and ends immediately before the supplied next reliable income date. Variable burn is prorated across each covered Europe/Riga calendar month as `monthly variable × covered days / days in month`; the rational terms are accumulated exactly and rounded half-even once at the final monetary boundary. Booked debits are excluded because authoritative current cash already contains them. A pending item linked to a scheduled item supersedes that schedule for the same cash need.
 
 ## Sinking Funds
 

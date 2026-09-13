@@ -79,6 +79,7 @@ export type SinkingFundSchedule = Readonly<{
 
 export type CurrentCycleSinkingDueByFund = Readonly<{
   fundId: SinkingFundId;
+  state: SinkingFundScheduleItem['state'];
   required: Money;
   satisfied: Money;
   outstanding: Money;
@@ -119,6 +120,14 @@ export type ReservationEffect = Readonly<{
   change: Money;
 }>;
 
+export type FundedConsumptionCoverage = Readonly<{
+  byTransaction: readonly Readonly<{
+    transactionId: EconomicFlow['transactionId'];
+    amount: Money;
+  }>[];
+  total: Money;
+}>;
+
 type ReservationHistoryInput = Readonly<{
   funds: readonly SinkingFund[];
   allocations: readonly SinkingFundAllocation[];
@@ -147,6 +156,8 @@ export type ReservationEffectInput = MetricMetadata &
     period: MeasurementPeriod;
     economicFlows: readonly EconomicFlow[];
   }>;
+
+export type FundedConsumptionCoverageInput = ReservationHistoryInput & MetricMetadata;
 
 type ReservationProgressMinor = Readonly<{
   reserved: bigint;
@@ -643,6 +654,7 @@ export function calculateCurrentCycleSinkingDue(
       const outstanding = item.currentCycleRequirement?.outstandingAmount ?? money(0n);
       return Object.freeze({
         fundId: item.fundId,
+        state: item.state,
         required,
         satisfied,
         outstanding,
@@ -794,6 +806,54 @@ export function calculateReservationEffect(
         ruleId: 'sinking-fund.reservation-change',
         inputKey: 'change',
         value: changeMinor.toString(),
+      },
+    ],
+    warnings: [],
+  });
+}
+
+export function calculateFundedConsumptionCoverage(
+  input: FundedConsumptionCoverageInput,
+): MetricResult<FundedConsumptionCoverage> {
+  const validation = validateReservationHistory(input);
+  const asOf = validation.status === 'complete' ? validation.history.asOf : validation.asOf;
+  const base = metadata(input, asOf);
+  if (validation.status === 'unavailable') {
+    return createMetricResult<FundedConsumptionCoverage>({
+      ...base,
+      status: 'unavailable',
+      value: null,
+      explanation: [],
+      warnings: [warning('sinking_fund.missing_allocation_history')],
+    });
+  }
+
+  const totals = new Map<EconomicFlow['transactionId'], bigint>();
+  for (const event of validation.history.allocations) {
+    if (event.kind !== 'funded_consumption' || compareInstants(event.effectiveAt, asOf) > 0)
+      continue;
+    totals.set(
+      event.relatedTransactionId,
+      (totals.get(event.relatedTransactionId) ?? 0n) + event.amount.amountMinor,
+    );
+  }
+  const byTransaction = Object.freeze(
+    [...totals.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([transactionId, amountMinor]) =>
+        Object.freeze({ transactionId, amount: money(amountMinor) }),
+      ),
+  );
+  const total = money(byTransaction.reduce((sum, item) => sum + item.amount.amountMinor, 0n));
+  return createMetricResult({
+    ...base,
+    status: 'complete',
+    value: Object.freeze({ byTransaction, total }),
+    explanation: [
+      {
+        ruleId: 'sinking-fund.funded-consumption-coverage',
+        inputKey: 'total',
+        value: total.amountMinor.toString(),
       },
     ],
     warnings: [],

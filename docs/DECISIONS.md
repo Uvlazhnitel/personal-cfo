@@ -232,6 +232,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** CCR inputs include the relevant Sinking Funds and complete reservation history, including pre-period events needed to validate opening balances. Funded-consumption and release events remain negative reservation changes for commitment accounting, so the CCR formula and rolling-window behavior do not change.
 
+## ADR-020 — Exact Spending Baseline Statistics and Proration
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Use half-even minor-unit medians, nearest-rank P80 variability, and a minimum of three complete monthly observations. After 24 complete months, an exact target-calendar-month factor may adjust only variable spending and is capped to ±20%; explicit recurring schedules remain unchanged. Linked reversals affect their booking month and cannot make a category-month negative. Operational variable burn is prorated over Europe/Riga calendar days, accumulated as an exact rational, and rounded half-even once.
+
+**Reasoning:** These rules avoid interpolation and binary floating point, preserve the authority of next-period recurring schedules, keep refund history auditable, and prevent month-length differences from creating hidden liquidity assumptions.
+
+**Alternatives:** Linear percentile interpolation adds an unnecessary rounding surface. Adjusting the whole baseline double-adjusts known recurring costs. A fixed 31-day divisor is simpler but distorts shorter calendar months.
+
+**Consequences:** Baseline results disclose their factor, excluded reversal excess, sample window, and warnings. Changing any policy requires an engine-version change and historical recalculation.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

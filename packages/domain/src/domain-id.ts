@@ -15,6 +15,11 @@ export type CashReconciliationId = DomainId<'cash-reconciliation'>;
 export type PayCycleId = DomainId<'pay-cycle'>;
 export type SinkingFundId = DomainId<'sinking-fund'>;
 export type SinkingFundAllocationId = DomainId<'sinking-fund-allocation'>;
+export type SpendingCategoryId = DomainId<'spending-category'>;
+export type ScheduledSpendingId = DomainId<'scheduled-spending'>;
+export type OperationalNeedId = DomainId<'operational-need'>;
+export type FutureObligationId = DomainId<'future-obligation'>;
+export type RestrictedCashId = DomainId<'restricted-cash'>;
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -63,6 +68,26 @@ export function parseSinkingFundId(value: unknown): SinkingFundId {
 
 export function parseSinkingFundAllocationId(value: unknown): SinkingFundAllocationId {
   return parseDomainId(value, 'sinking-fund-allocation');
+}
+
+export function parseSpendingCategoryId(value: unknown): SpendingCategoryId {
+  return parseDomainId(value, 'spending-category');
+}
+
+export function parseScheduledSpendingId(value: unknown): ScheduledSpendingId {
+  return parseDomainId(value, 'scheduled-spending');
+}
+
+export function parseOperationalNeedId(value: unknown): OperationalNeedId {
+  return parseDomainId(value, 'operational-need');
+}
+
+export function parseFutureObligationId(value: unknown): FutureObligationId {
+  return parseDomainId(value, 'future-obligation');
+}
+
+export function parseRestrictedCashId(value: unknown): RestrictedCashId {
+  return parseDomainId(value, 'restricted-cash');
 }
 
 export function serializeDomainId<Entity extends string>(id: DomainId<Entity>): string {
