@@ -206,7 +206,19 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Alternatives:** Defaulting reservation effects to zero hides missing inputs. Treating all ambiguity as partial can present a materially wrong ratio. Backdating refunds silently rewrites previously reported periods.
 
-**Consequences:** Callers must assert complete zero reservation impact when appropriate. Resolution or reclassification recalculates affected periods and rolling windows. This narrows ADR-014 for CCR specifically: its material unresolved-transfer result is unavailable rather than partial.
+**Consequences:** Callers must supply complete reservation-event coverage before an empty period can produce zero impact. Resolution or reclassification recalculates affected periods and rolling windows. This narrows ADR-014 for CCR specifically: its material unresolved-transfer result is unavailable rather than partial.
+
+## ADR-018 — Explicit Pay Dates and Event-Based Reservation Accounting
+
+**Status:** Accepted — 2026-09-13
+
+**Decision:** Actual positive primary-salary triggers define Pay Cycle boundaries. Callers supply Europe/Riga effective dates and a future primary-pay schedule with explicit coverage; the engine does not forecast salary dates. The active cycle counts for a committed fund created mid-cycle. Funding dates after the due date are excluded, and remainder cents are assigned to the earliest eligible opportunities. CCR derives reserve changes from immutable allocation, funded-consumption, and release events for each measurement period.
+
+**Reasoning:** Explicit dates preserve holiday and booking-date variation without embedding a cadence predictor. Event aggregation makes current and rolling CCR correct for different windows, while front-loaded remainder cents retain the accepted upward-rounded current requirement and exact target total.
+
+**Alternatives:** Calendar-month cycles and generated salary dates introduce hidden assumptions. One pre-aggregated reserve value cannot serve multiple rolling periods. Equal rounded contributions can lose cents.
+
+**Consequences:** Expected-pay and reservation histories carry completeness coverage. Empty covered history yields zero reserve change; missing coverage makes the result unavailable. Overfunding remains reserved and separately visible until an explicit release, and corrections use compensating immutable events.
 
 ## Open Decisions
 

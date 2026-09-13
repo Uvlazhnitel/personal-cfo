@@ -117,11 +117,11 @@ It is not the mean of monthly percentages. Current month and rolling 3-, 6-, and
 - Unresolved credits cannot count as income. Non-material ambiguity makes CCR partial; material ambiguity makes CCR unavailable.
 - A changed classification, fund allocation, refund link, FX rate, or opening boundary recalculates every affected rolling window.
 
-### Stage 2B CCR Boundary
+### Reservation Input Boundary
 
-Until Stage 2C supplies Sinking Fund allocation facts, CCR callers must provide an explicit short-term-reserve effect. They may provide a complete zero only when they know that no reservation effect applies; unknown reservation coverage makes CCR unavailable. This preserves the final formula without introducing Sinking Fund models early.
+CCR receives immutable Sinking Fund reservation events plus explicit history coverage and derives the short-term-reserve change independently for each measurement period. An empty event set means zero change only when its coverage contains the complete period; missing coverage makes CCR unavailable. Rolling windows never reuse one pre-aggregated reserve value.
 
-Economic-flow amounts are canonical EUR reporting values. Earned-income meaning is explicit and may be negative only for a booked income correction. `other_external_flow` is disclosed but remains neutral until given a more specific canonical meaning. Linked refunds and reimbursements reduce consumption on their own booking date; unlinked credits reduce nothing and never become income. A material classification or transfer ambiguity makes CCR unavailable, while a non-material ambiguity permits only a warned partial value. Cash reconciliation adjustments remain CCR-neutral; a material unexplained variance makes the otherwise calculated CCR partial.
+Economic-flow amounts are canonical EUR reporting values. Earned-income meaning is explicit and may be negative only for a booked income correction. `other_external_flow` is disclosed but remains neutral until given a more specific canonical meaning. Linked refunds and reimbursements reduce consumption on their own booking date; an unlinked refund or reimbursement requires a matching active ambiguity, reduces nothing, and never becomes income. A material classification or transfer ambiguity makes CCR unavailable, while a non-material ambiguity permits only a warned partial value. Cash reconciliation adjustments remain CCR-neutral; a material unexplained variance makes the otherwise calculated CCR partial.
 
 ## Unresolved Transfer Candidates
 
@@ -197,7 +197,7 @@ Pending debits increase operational need; pending credits do not reduce it. If t
 
 ### Pay-Cycle Boundary
 
-A Pay Cycle begins at a booked transaction from the configured primary salary source and ends immediately before the next booked primary salary. Side-hustle income does not open a cycle. Historical boundaries use actual salary bookings; expected salary cadence is used only to count future funding opportunities. A missing or delayed next salary leaves the current cycle incomplete.
+A Pay Cycle begins at a booked positive transaction explicitly designated as the primary-salary trigger and ends immediately before the next such booking. The trigger carries its Europe/Riga effective date; the opening transaction UUID is also the stable derived cycle UUID. Side-hustle income, other earned income, and negative salary corrections do not open a cycle. Historical boundaries use actual salary bookings; explicitly supplied expected salary dates are used only to count future funding opportunities. A missing or delayed next salary leaves the current cycle open.
 
 ### Current-Cycle Contribution Formula
 
@@ -218,6 +218,8 @@ current-cycle outstanding = max(
 ```
 
 Cap outstanding at the fund's current unallocated shortfall. If no future opportunity occurs before the due date, the current cycle is the only opportunity and the entire shortfall is due now. Releases increase the outstanding amount when applicable. A fully funded or overfunded fund requires zero contribution; overfunding is not released automatically.
+
+Expected funding dates must be complete through the fund due date. Dates strictly after the effective evaluation date and on or before the due date are future opportunities; a later salary is too late. The current active cycle remains the first opportunity for a committed fund created mid-cycle. Exact projected schedules divide the remaining minor units by opportunity count and assign remainder cents to the earliest opportunities, so €100 across three opportunities is €33.34, €33.33, and €33.33.
 
 The outstanding amount becomes due at salary booking, or immediately for a committed fund created or changed mid-cycle. It enters minimum and comfort cash before an allocation exists. When €X is allocated, current-cycle due falls by €X while ring-fenced cash rises by €X, so required liquidity and Safe to Invest do not change. Only the actual allocation changes reserved balance and CCR.
 
@@ -240,6 +242,8 @@ auto-allocatable cash = max(
 A partial allocation leaves the rest outstanding and protected by Safe to Invest. Manual allocation may use any otherwise unallocated cash but must warn if it leaves free cash below non-Sinking minimum liquidity.
 
 An allocation cannot exceed eligible liquid cash. Spending linked to the fund lowers cash and allocated balance by the covered amount. Any excess spending is ordinary current-period consumption. A smaller-than-planned purchase leaves the remainder reserved until the user releases, rolls over, or reallocates it.
+
+Reservation events are immutable positive-magnitude `allocation`, `funded_consumption`, or `release` facts. Their reserved-balance deltas are positive, negative, and negative respectively. A funded-consumption event must link to booked consumption at the same instant and cannot cover more than that consumption. Corrections use compensating events. Summing these signed deltas within a start-inclusive/end-exclusive measurement period produces its CCR reservation effect.
 
 Fund target, due date, allocation, release, and spending-link changes recalculate contribution, liquidity, CCR, Safe to Invest, Cash Drag, and forecasts from their effective dates.
 

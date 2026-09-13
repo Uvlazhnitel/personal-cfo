@@ -16,5 +16,7 @@ export * from './local-date.js';
 export * from './measurement-period.js';
 export * from './metric-result.js';
 export * from './money.js';
+export * from './pay-cycle.js';
 export * from './portfolio-valuation.js';
 export * from './reportable-amount.js';
+export * from './sinking-fund.js';

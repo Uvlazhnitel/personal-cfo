@@ -49,3 +49,9 @@ export function parseLocalDate(value: unknown): LocalDate {
 export function serializeLocalDate(date: LocalDate): string {
   return date;
 }
+
+export function compareLocalDates(left: LocalDate, right: LocalDate): -1 | 0 | 1 {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}

@@ -174,7 +174,8 @@ function input(
     ambiguities: [],
     period: SEPTEMBER,
     historyCoverage: SEPTEMBER,
-    shortTermReserveEffect: { status: 'complete', change: createMoney(0n, EUR) },
+    sinkingFundAllocations: [],
+    reservationCoverage: SEPTEMBER,
     asOf: AS_OF,
     engineVersion: '2b.0.0',
     settingsVersion: 'settings-1',
@@ -537,15 +538,8 @@ describe('capital conversion rate', () => {
       calculateCapitalConversionRate(input([], [], { historyCoverage: incompleteCoverage })).status,
     ).toBe('unavailable');
     expect(
-      calculateCapitalConversionRate(
-        input([], [], {
-          shortTermReserveEffect: {
-            status: 'unavailable',
-            change: null,
-            reasonCode: 'not-evaluated',
-          },
-        }),
-      ).status,
+      calculateCapitalConversionRate(input([], [], { reservationCoverage: incompleteCoverage }))
+        .status,
     ).toBe('unavailable');
   });
 
@@ -596,6 +590,10 @@ describe('capital conversion rate', () => {
         ],
         {
           historyCoverage: createMeasurementPeriod({
+            startInclusive: AUGUST.startInclusive,
+            endExclusive: SEPTEMBER.endExclusive,
+          }),
+          reservationCoverage: createMeasurementPeriod({
             startInclusive: AUGUST.startInclusive,
             endExclusive: SEPTEMBER.endExclusive,
           }),

@@ -20,15 +20,13 @@ import type {
   MeasurementPeriod,
   MetricResult,
   Money,
+  SinkingFundAllocation,
 } from '@personal-cfo/domain';
 
 import { FinancialEngineInvariantError } from './errors.js';
 import type { LedgerInput, ValidatedLedger } from './ledger.js';
 import { validateLedger } from './ledger.js';
-
-export type ShortTermReserveEffect =
-  | Readonly<{ status: 'complete'; change: Money }>
-  | Readonly<{ status: 'unavailable'; change: null; reasonCode: string }>;
+import { calculateReservationEffect } from './sinking-funds.js';
 
 export type CapitalCreatedBreakdown = Readonly<{
   recognizedIncome: Money;
@@ -69,7 +67,8 @@ export type CapitalConversionInput = LedgerInput &
     ambiguities: readonly FlowAmbiguity[];
     period: MeasurementPeriod;
     historyCoverage: MeasurementPeriod;
-    shortTermReserveEffect: ShortTermReserveEffect;
+    sinkingFundAllocations: readonly SinkingFundAllocation[];
+    reservationCoverage: MeasurementPeriod;
     asOf: Instant;
     engineVersion: string;
     settingsVersion: string;
@@ -91,7 +90,8 @@ type ValidatedInput = Readonly<{
   ambiguities: readonly FlowAmbiguity[];
   period: MeasurementPeriod;
   historyCoverage: MeasurementPeriod;
-  reserveEffect: ShortTermReserveEffect;
+  reserveChange: Money | null;
+  reservationWarnings: readonly DataWarning[];
   asOf: Instant;
 }>;
 
@@ -267,6 +267,25 @@ function validateAmbiguities(
       );
     }
   }
+
+  const ambiguitiesByTransaction = new Map(
+    ambiguities.map((ambiguity) => [ambiguity.transactionId, ambiguity]),
+  );
+  for (const flow of flows) {
+    if (
+      (flow.kind === 'refund' || flow.kind === 'reimbursement') &&
+      flow.relatedTransactionId === null
+    ) {
+      const ambiguity = ambiguitiesByTransaction.get(flow.transactionId);
+      const expectedKind = flow.kind === 'refund' ? 'unlinked_refund' : 'unlinked_reimbursement';
+      if (ambiguity?.kind !== expectedKind) {
+        throw new FinancialEngineInvariantError(
+          'capital_conversion.missing_unlinked_reversal_ambiguity',
+          'Every unlinked refund or reimbursement requires a matching active ambiguity.',
+        );
+      }
+    }
+  }
 }
 
 function validateCashReconciliations(
@@ -356,32 +375,16 @@ function validateInput(input: CapitalConversionInput): ValidatedInput {
     );
   }
 
-  let reserveEffect: ShortTermReserveEffect;
-  if (input.shortTermReserveEffect.status === 'complete') {
-    const change = createMoney(
-      input.shortTermReserveEffect.change.amountMinor,
-      input.shortTermReserveEffect.change.currency,
-    );
-    if (change.currency !== EUR) {
-      throw new FinancialEngineInvariantError(
-        'capital_conversion.reserve_currency_mismatch',
-        'Short-term reserve effects must use EUR reporting amounts.',
-      );
-    }
-    reserveEffect = Object.freeze({ status: 'complete', change });
-  } else {
-    if (input.shortTermReserveEffect.reasonCode.trim().length === 0) {
-      throw new FinancialEngineInvariantError(
-        'capital_conversion.invalid_reserve_reason',
-        'An unavailable reserve effect requires a reason code.',
-      );
-    }
-    reserveEffect = Object.freeze({
-      status: 'unavailable',
-      change: null,
-      reasonCode: input.shortTermReserveEffect.reasonCode,
-    });
-  }
+  const reservationEffect = calculateReservationEffect({
+    allocations: input.sinkingFundAllocations,
+    reservationCoverage: input.reservationCoverage,
+    period,
+    economicFlows: flows,
+    asOf,
+    engineVersion: input.engineVersion,
+    settingsVersion: input.settingsVersion,
+    inputWatermark: input.inputWatermark,
+  });
 
   return Object.freeze({
     ledger,
@@ -390,7 +393,8 @@ function validateInput(input: CapitalConversionInput): ValidatedInput {
     ambiguities,
     period,
     historyCoverage,
-    reserveEffect,
+    reserveChange: reservationEffect.value?.change ?? null,
+    reservationWarnings: reservationEffect.warnings,
     asOf,
   });
 }
@@ -437,8 +441,7 @@ function calculateBreakdown(input: ValidatedInput): CapitalCreatedBreakdown {
     }
   }
 
-  const reserveChange =
-    input.reserveEffect.status === 'complete' ? input.reserveEffect.change.amountMinor : 0n;
+  const reserveChange = input.reserveChange?.amountMinor ?? 0n;
   const netConsumption = grossConsumption - refunds - reimbursements;
   const capitalCreated = recognizedIncome - netConsumption - reserveChange;
 
@@ -520,11 +523,9 @@ function quality(input: ValidatedInput): Readonly<{
     status = 'unavailable';
     warnings.push(warning('ccr.missing_history_coverage'));
   }
-  if (input.reserveEffect.status === 'unavailable') {
+  if (input.reserveChange === null) {
     status = 'unavailable';
-    warnings.push(
-      warning('ccr.reserve_effect_unavailable', { reasonCode: input.reserveEffect.reasonCode }),
-    );
+    warnings.push(...input.reservationWarnings);
   }
 
   const classifiedTransactions = new Set(input.flows.map((flow) => flow.transactionId));
