@@ -332,6 +332,14 @@ Only one step is recommended per four-Pay-Cycle reassessment window. Acceptance 
 
 A hold is recommended if capacity is uncertain or within one step of the current contribution. A Step-Down is eligible if the current contribution exceeds sustainable capacity or fails the same 60-day test. Reduce it by €50 steps to the greatest amount that passes, including zero. A projected minimum-cash breach bypasses the normal cooldown.
 
+“Latest four” means the four most recent actual closed Pay Cycles before the current open cycle. The engine does not skip a materially incomplete recent closed cycle and backfill it with an older clean cycle. Each historical contribution is explicitly attributed to the configured recurring plan or to ad-hoc investing; only the former enters capacity. A trusted pre-closing Safe-to-Invest snapshot must be complete, occur within the cycle before its closing salary, and exclude that salary. Stage 2G will assemble and prove that snapshot provenance.
+
+The forward window evaluates the next 60 Europe/Riga daily closing boundaries, from the day after the effective date through day 60 inclusive. Current liquid cash is the starting state at the effective-date boundary. A structured projection supplies explicit primary-salary inflow, normal-spending outflow, upper-bound committed-obligation outflow, Sinking-funded spending outflow, Sinking protection, and projected minimum/comfort cash for every day. The base cash path must reconcile from these components before the candidate contribution is applied. A Sinking requirement changes protection thresholds but is not a cash outflow; its funded purchase reduces cash once.
+
+The recurring-contribution schedule must be complete through day 60. Expected salary is unavailable before its supplied date, and the stress model contains no market-return input, making its return assumption exactly 0%. At each boundary, candidate occurrences through that date are subtracted from projected base cash. A pass requires no minimum-cash breach and non-negative ending comfort headroom.
+
+If complete sustainable capacity proves the current contribution is excessive while the forward projection is incomplete, the engine may return a `partial` Step-Down to the greatest configured decrement not exceeding capacity; it must not claim forward safety or a residual-breach result. With complete stress data, select the greatest lower step that passes. If zero still fails, return zero with an explicit residual liquidity breach. When the current contribution is already zero, no Step-Down exists even if the unrelated liquidity shortfall remains.
+
 ## Cash Reconciliation
 
 A physical count sets the Cash Account's authoritative balance from the reconciliation instant by creating a signed `cash_reconciliation_adjustment`; it never overwrites prior entries.

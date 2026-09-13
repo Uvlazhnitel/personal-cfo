@@ -256,6 +256,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Input assembly must classify investability readiness explicitly and retain each day's authoritative comfort threshold. Historical observations stop before the current effective date. Persistence-backed recommendation lifecycle remains a later-stage responsibility.
 
+## ADR-022 — Auditable Daily Step-Up Stress Boundaries
+
+**Status:** Accepted — 2026-09-14
+
+**Decision:** Evaluate recurring-contribution candidates at the next 60 Europe/Riga daily closing boundaries, beginning the day after the effective date. Current authoritative liquid cash is the opening state. Stage 2F consumes a structured, arithmetically reconciled daily projection rather than rebuilding baseline, obligation, or Sinking Fund policy. A complete-capacity Step-Down may remain `partial` when its exact target lacks complete forward evidence; zero is returned with an explicit residual-breach flag when even zero fails a complete path.
+
+**Reasoning:** Starting after the current authoritative boundary prevents same-day cash flows from being applied twice. Named projected components retain auditability without duplicating Stage 2D calculations. A known excessive contribution still supports a conservative reduction when future coverage is incomplete, while the partial status prevents the proposed target from being presented as proven safe.
+
+**Alternatives:** Including the effective date requires unresolved intraday ordering. Accepting opaque balances loses salary, obligation, and Sinking provenance. Suppressing every capacity-driven reduction until forward coverage is complete hides a known overcommitment; claiming such a reduction is completely safe overstates the evidence.
+
+**Consequences:** Projection assembly must provide complete-through coverage and one reconciled row per forward date. Recommendation persistence later associates an issued Step-Up with the ordered four-cycle window. Safety Step-Down remains independent of Cash Drag and upward-window suppression.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

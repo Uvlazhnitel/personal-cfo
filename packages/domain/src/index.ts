@@ -14,6 +14,7 @@ export * from './economic-flow.js';
 export * from './exact-fraction.js';
 export * from './instant.js';
 export * from './investment-contribution.js';
+export * from './investment-step.js';
 export * from './investability.js';
 export * from './local-date.js';
 export * from './measurement-period.js';

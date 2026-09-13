@@ -2,6 +2,7 @@ export * from './errors.js';
 export * from './capital-conversion.js';
 export * from './cash-drag.js';
 export * from './ledger.js';
+export * from './investment-step.js';
 export * from './liquidity.js';
 export * from './net-worth.js';
 export * from './pay-cycles.js';

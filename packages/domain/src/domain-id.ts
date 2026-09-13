@@ -20,6 +20,8 @@ export type ScheduledSpendingId = DomainId<'scheduled-spending'>;
 export type OperationalNeedId = DomainId<'operational-need'>;
 export type FutureObligationId = DomainId<'future-obligation'>;
 export type RestrictedCashId = DomainId<'restricted-cash'>;
+export type RecurringInvestmentPlanId = DomainId<'recurring-investment-plan'>;
+export type RecurringInvestmentOccurrenceId = DomainId<'recurring-investment-occurrence'>;
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -88,6 +90,16 @@ export function parseFutureObligationId(value: unknown): FutureObligationId {
 
 export function parseRestrictedCashId(value: unknown): RestrictedCashId {
   return parseDomainId(value, 'restricted-cash');
+}
+
+export function parseRecurringInvestmentPlanId(value: unknown): RecurringInvestmentPlanId {
+  return parseDomainId(value, 'recurring-investment-plan');
+}
+
+export function parseRecurringInvestmentOccurrenceId(
+  value: unknown,
+): RecurringInvestmentOccurrenceId {
+  return parseDomainId(value, 'recurring-investment-occurrence');
 }
 
 export function serializeDomainId<Entity extends string>(id: DomainId<Entity>): string {
