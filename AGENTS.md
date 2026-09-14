@@ -27,7 +27,7 @@ packages/integrations/     external-provider adapters
 docs/                      requirements and design
 ```
 
-Dependencies point inward: delivery and adapters may depend on domain interfaces; the financial engine depends only on provider-neutral domain types and deterministic utilities. Provider DTOs, persistence models, framework types, and AI clients must not enter the engine.
+Dependencies point inward: delivery and adapters may depend on domain interfaces. The financial engine depends only on provider-neutral domain types plus the explicitly allowlisted `decimal.js` forecast-math dependency; decimal objects stay internal. Provider DTOs, persistence models, framework types, and AI clients must not enter the engine.
 
 ## Development and Testing
 

@@ -13,7 +13,7 @@ const packages = [
 const localPackageNames = new Set(packages.map(([, name]) => name));
 const allowedDependencies = new Map([
   ['@personal-cfo/domain', new Set()],
-  ['@personal-cfo/financial-engine', new Set(['@personal-cfo/domain'])],
+  ['@personal-cfo/financial-engine', new Set(['@personal-cfo/domain', 'decimal.js'])],
   ['@personal-cfo/data', new Set(['@personal-cfo/domain'])],
   ['@personal-cfo/integrations', new Set(['@personal-cfo/domain'])],
   [
@@ -60,10 +60,16 @@ for (const [directory, expectedName] of packages) {
         violations.push(`${expectedName}: ${field} cannot include ${dependency}`);
       }
 
+      if (expectedName === '@personal-cfo/domain' && !localPackageNames.has(dependency)) {
+        violations.push(
+          `${expectedName}: ${field} cannot include external dependency ${dependency}`,
+        );
+      }
+
       if (
-        (expectedName === '@personal-cfo/domain' ||
-          expectedName === '@personal-cfo/financial-engine') &&
-        !localPackageNames.has(dependency)
+        expectedName === '@personal-cfo/financial-engine' &&
+        !localPackageNames.has(dependency) &&
+        dependency !== 'decimal.js'
       ) {
         violations.push(
           `${expectedName}: ${field} cannot include external dependency ${dependency}`,

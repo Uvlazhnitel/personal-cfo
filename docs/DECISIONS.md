@@ -268,6 +268,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Projection assembly must provide complete-through coverage and one reconciled row per forward date. Recommendation persistence later associates an issued Step-Up with the ordered four-cycle window. Safety Step-Down remains independent of Cash Drag and upward-window suppression.
 
+## ADR-023 — Deterministic Forecast Precision and Checkpoint Orchestration
+
+**Status:** Accepted — 2026-09-14
+
+**Decision:** Long-term forecasts begin at the next full Europe/Riga month and use an isolated `decimal.js` clone at 64 significant digits with half-even rounding to calculate compound monthly roots. Money returns to integer minor units at every monthly boundary. `evaluateFinancialState` derives investability, historical Cash Drag observations, pre-closing Safe to Invest, and forward Step-Up paths from primitive checkpoint facts under one run envelope. Pre-closing evaluation uses the prior local day close; later same-date activity makes the capacity observation incomplete.
+
+**Reasoning:** Annual-to-monthly compound roots are generally irrational and cannot be represented by bigint fractions, while JavaScript binary floating point is prohibited for authoritative financial arithmetic. A next-month boundary avoids awarding a full month's return to a partial month. Primitive checkpoints close the earlier trust boundaries without adding persistence or fabricatable downstream metrics.
+
+**Alternatives:** Annual-rate division by 12 is mathematically different. Carrying fractional cents across boundaries hides non-monetary state. Accepting ready-made readiness, daily excess, STI, or projection rows merely relocates authority to callers. Intraday ordering around salary is unavailable in the canonical V1 facts.
+
+**Consequences:** `packages/financial-engine` may depend only on `@personal-cfo/domain` and the explicitly reviewed `decimal.js` package. Decimal objects stay private and outputs use canonical rate strings. Historical checkpoint assembly must retain effective settings and complete source facts; stored prior-version snapshot reproduction remains a future persistence concern.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

@@ -74,3 +74,15 @@ export function priorYearMonths(target: YearMonth, count: number): readonly Year
   }
   return Object.freeze(result);
 }
+
+export function addYearMonths(month: YearMonth, offset: number): YearMonth {
+  if (!Number.isSafeInteger(offset)) throw new RangeError('Year-month offset must be an integer.');
+  const year = Number(month.slice(0, 4));
+  const monthIndex = Number(month.slice(5, 7)) - 1;
+  const absolute = year * 12 + monthIndex + offset;
+  const resultYear = Math.floor(absolute / 12);
+  const resultMonth = (absolute % 12) + 1;
+  return parseYearMonth(
+    `${resultYear.toString().padStart(4, '0')}-${resultMonth.toString().padStart(2, '0')}`,
+  );
+}

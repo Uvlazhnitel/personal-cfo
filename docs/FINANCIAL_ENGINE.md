@@ -364,13 +364,32 @@ Potential saving is the positive difference between the current forecast/recurri
 
 ## Financial Forecast
 
-Forecasts use monthly deterministic steps for 1, 3, 5, and 10 years. Inputs include starting cash and investments, explicit future net capital contributions, allocation between cash and investments, known planned expenses, and visible return/inflation assumptions. Sinking Fund allocations are internal designations; only the planned external expense reduces forecast Net Worth.
+Forecasts start at the first day of the next full Europe/Riga calendar month; the current state is carried unchanged through the remaining partial month. They use monthly deterministic steps for 1, 3, 5, and 10 years (12, 36, 60, and 120 boundaries). Inputs include authoritative starting cash and investment market value, explicit signed cash and investment flows by month, known planned expenses, and visible return/inflation assumptions. Sinking Fund allocations are internal designations; only the planned external expense reduces forecast Net Worth.
 
 Contributions-only uses a 0% investment return. Assumed-return views initially expose 3%, 5%, and 7% nominal annual scenarios; 5% is the selected default but is always displayed and editable. Optional real-value display uses a visible, editable 2% inflation assumption.
 
-Convert annual rates to monthly factors with arbitrary-precision decimal arithmetic. For each month, apply return to opening investment value, then apply end-of-month contribution/withdrawal and planned expenses. Round resulting money half-even to minor units at each monthly boundary and retain the exact assumption set.
+Convert annual rates with `monthly factor = (1 + annual rate)^(1/12) - 1`, never annual-rate division by 12. `decimal.js` is contained inside the financial engine with an isolated 64-significant-digit, half-even configuration; decimal instances never cross the public API. For each month, apply return to opening investment value, then apply end-of-month investment flow, cash flow, and planned expenses. Round investment value half-even to minor units at every boundary, and derive displayed modeled return by reconciliation. A contribution therefore starts earning return in the following month.
 
-Do not infer future salary growth, contribution increases, or market returns from history. They must be explicit scenario inputs. Planned expenses are deducted in their due month. A mandatory expense range uses its upper bound in the base/conservative forecast; comparison views may show its lower bound separately. Outputs separate current capital, user contributions, planned expenses, modeled return, cash, and investment value. UI and AI must label all non-zero return results as modeled, not guaranteed. Missing starting values or mandatory-expense amounts make the affected horizon unavailable rather than assuming zero.
+Do not infer future salary growth, contribution increases, or market returns from history. They must be explicit scenario inputs, and a Step-Up/Step-Down result never mutates them. Planned expenses are deducted once in their due month. A mandatory or committed optional range uses its upper bound; uncommitted optional expenses require explicit scenario inclusion. Negative cash remains visible and never triggers an implicit investment sale. Outputs separate current capital, user flows, planned expenses, modeled return, cash, and investment value. Optional real value deflates the nominal total with the same compound-root policy and an explicit inflation rate; it never changes the nominal path. UI and AI must label all non-zero return results as modeled, not guaranteed. Missing starting values or a required planned-expense amount makes that month and only horizons containing it unavailable rather than assuming zero.
+
+Every available monthly row reconciles exactly:
+
+```text
+closing investment = opening investment + modeled return + investment flow
+closing cash       = opening cash + cash flow - planned expenses
+closing capital    = starting capital + cumulative user flows
+                   - cumulative planned expenses + cumulative modeled return
+```
+
+## Versioned Financial-State Orchestration
+
+`evaluateFinancialState(input)` is a pure composition boundary. One run envelope supplies `asOf`, Europe/Riga `effectiveDate`, engine version, effective settings version, and input watermark. Every current-run `MetricResult` inherits that envelope. Metrics retain independent completeness: failure of portfolio valuation may make Net Worth and forecast unavailable without suppressing an otherwise supported spending baseline or liquidity calculation.
+
+Authoritative historical flows are cross-referenced to booked canonical transactions at the same instant; pending activity is prospective only. The orchestrator derives current investability readiness from structured balance, baseline, obligation, reservation, classification, transfer-ambiguity, and cash-reconciliation facts. Only non-material unresolved transfers and non-material cash variances can produce provisional Safe to Invest; material or unrelated incompleteness blocks it. Warning text is never parsed as financial evidence.
+
+Cash Drag history is built by recalculating each historical checkpoint's Liquidity Reserve and copying that result's liquid cash, historical comfort cash, and completeness. Historical Step-Up capacity similarly recalculates Safe to Invest from an effective-dated checkpoint at the prior Europe/Riga day close. Because transaction ordering inside the closing-salary date is not authoritative, any booked balance-affecting event between that cutoff and the salary boundary makes the cycle observation incomplete; financial filtering remains strictly `effectiveAt < closing salary effectiveAt`.
+
+The 60-day Step-Up path is assembled from named salary, normal-spending, committed-obligation, Sinking-funded-spending, and daily protection facts. Base cash reconciles recursively, while projected Minimum/Comfort reuse the accepted liquidity formulas. Requirement-to-reserve swaps leave both thresholds unchanged. Historical checkpoints use their effective historical settings; current engine code may recompute them, but does not claim to reproduce a previously persisted old-engine snapshot.
 
 ## Recommendation and AI Boundary
 

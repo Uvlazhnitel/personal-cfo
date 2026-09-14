@@ -22,6 +22,9 @@ export type FutureObligationId = DomainId<'future-obligation'>;
 export type RestrictedCashId = DomainId<'restricted-cash'>;
 export type RecurringInvestmentPlanId = DomainId<'recurring-investment-plan'>;
 export type RecurringInvestmentOccurrenceId = DomainId<'recurring-investment-occurrence'>;
+export type ForecastCapitalFlowId = DomainId<'forecast-capital-flow'>;
+export type ForecastPlannedExpenseId = DomainId<'forecast-planned-expense'>;
+export type ForwardProjectionFlowId = DomainId<'forward-projection-flow'>;
 
 const UUID_V7_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu;
 
@@ -100,6 +103,18 @@ export function parseRecurringInvestmentOccurrenceId(
   value: unknown,
 ): RecurringInvestmentOccurrenceId {
   return parseDomainId(value, 'recurring-investment-occurrence');
+}
+
+export function parseForecastCapitalFlowId(value: unknown): ForecastCapitalFlowId {
+  return parseDomainId(value, 'forecast-capital-flow');
+}
+
+export function parseForecastPlannedExpenseId(value: unknown): ForecastPlannedExpenseId {
+  return parseDomainId(value, 'forecast-planned-expense');
+}
+
+export function parseForwardProjectionFlowId(value: unknown): ForwardProjectionFlowId {
+  return parseDomainId(value, 'forward-projection-flow');
 }
 
 export function serializeDomainId<Entity extends string>(id: DomainId<Entity>): string {
