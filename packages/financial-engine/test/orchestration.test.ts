@@ -6,6 +6,8 @@ import {
   createAccountBalanceSnapshot,
   createCalendarMonthCoverage,
   createCanonicalTransaction,
+  createCashReconciliation,
+  createCashReconciliationResolution,
   createExactFraction,
   createEconomicFlow,
   createFlowAmbiguity,
@@ -20,8 +22,11 @@ import {
   createRecurringInvestmentSchedule,
   createSinkingFund,
   createSinkingFundAllocation,
+  createSpendingObservation,
   createFutureObligation,
   parseAccountId,
+  parseCashReconciliationId,
+  parseCurrencyCode,
   parseEconomicFlowId,
   parseEntryId,
   parseForecastPlannedExpenseId,
@@ -34,16 +39,18 @@ import {
   parseRecurringInvestmentOccurrenceId,
   parseSinkingFundAllocationId,
   parseSinkingFundId,
+  parseSpendingCategoryId,
   parseTransactionId,
   parseYearMonth,
 } from '@personal-cfo/domain';
-import type { LocalDate, Money } from '@personal-cfo/domain';
+import type { CanonicalTransaction, CurrencyCode, LocalDate, Money } from '@personal-cfo/domain';
 
 import {
   DEFAULT_FORECAST_SETTINGS,
   DEFAULT_INVESTMENT_STEP_SETTINGS,
   deriveInvestabilityReadiness,
   evaluateFinancialState,
+  projectCanonicalFinancialFactsAt,
 } from '../src/index.js';
 import type { CheckpointQuality, FinancialEngineInput } from '../src/index.js';
 import { addLocalDays } from '../src/local-calendar.js';
@@ -362,7 +369,6 @@ function inputWithSalaryHistory(): FinancialEngineInput {
       dates: [parseLocalDate(dates[index + 1]!)],
       completeThrough: parseLocalDate('2027-12-31'),
     },
-    variables,
   }));
   return {
     ...base,
@@ -431,14 +437,6 @@ function integratedInput(): FinancialEngineInput {
     '2026-10-27',
     '2026-11-27',
   ].map(parseLocalDate);
-  const variables = {
-    economicFlows: base.canonical.economicFlows,
-    ambiguities: base.canonical.ambiguities,
-    cashReconciliations: base.canonical.cashReconciliations,
-    sinkingFunds: [fund],
-    sinkingFundAllocations: [allocation],
-    spendingObservations: base.canonical.spendingObservations,
-  };
   const current = {
     ...base.current,
     futureObligations: [obligation],
@@ -450,13 +448,11 @@ function integratedInput(): FinancialEngineInput {
   const preClosing = base.historicalCheckpoints.map((checkpoint) => ({
     ...checkpoint,
     expectedPrimaryPaySchedule: current.expectedPrimaryPaySchedule,
-    variables,
   }));
   const cashDragDays = Array.from({ length: 59 }, (_, index) => ({
     kind: 'cash_drag_day' as const,
     date: addLocalDays(EFFECTIVE_DATE, index - 59),
     ...current,
-    variables,
   }));
   const obligationDate = parseLocalDate('2026-10-15');
   return {
@@ -534,6 +530,202 @@ function integratedInput(): FinancialEngineInput {
   };
 }
 
+function withHistoricalConsumption(base: FinancialEngineInput): FinancialEngineInput {
+  const transactions = [];
+  const flows = [];
+  const observations = [];
+  for (const [index, month] of ['01', '02', '03'].entries()) {
+    const transactionId = parseTransactionId(uuid(700 + index));
+    const effectiveAt = parseInstant(`2026-${month}-15T08:00:00Z`);
+    const flowId = parseEconomicFlowId(uuid(710 + index));
+    transactions.push(
+      createCanonicalTransaction({
+        id: transactionId,
+        effectiveAt,
+        bookingStatus: 'booked',
+        kind: 'external_flow',
+        entries: [
+          {
+            id: parseEntryId(uuid(720 + index)),
+            transactionId,
+            accountId: BANK_ID,
+            amount: money(-30_000n),
+            role: 'external_flow',
+          },
+        ],
+      }),
+    );
+    flows.push(
+      createEconomicFlow({
+        id: flowId,
+        transactionId,
+        effectiveAt,
+        amount: money(30_000n),
+        kind: 'consumption',
+        reimbursable: false,
+      }),
+    );
+    observations.push(
+      createSpendingObservation({
+        economicFlowId: flowId,
+        economicDate: parseLocalDate(`2026-${month}-15`),
+        categoryId: parseSpendingCategoryId(uuid(730)),
+        necessity: 'essential',
+        cadence: 'variable',
+        irregular: false,
+      }),
+    );
+  }
+  return {
+    ...base,
+    canonical: {
+      ...base.canonical,
+      transactions: [...base.canonical.transactions, ...transactions],
+      economicFlows: [...base.canonical.economicFlows, ...flows],
+      spendingObservations: observations,
+    },
+  };
+}
+
+function withHistoricalSinkingAllocation(base: FinancialEngineInput): FinancialEngineInput {
+  const fund = createSinkingFund({
+    id: parseSinkingFundId(uuid(740)),
+    label: 'Historical reserve',
+    target: money(100_000n),
+    dueDate: parseLocalDate('2026-12-15'),
+    priority: 1,
+    committed: false,
+    status: 'active',
+    allocationPolicy: 'manual',
+    createdAt: parseInstant('2026-04-02T09:00:00Z'),
+  });
+  const allocation = createSinkingFundAllocation({
+    id: parseSinkingFundAllocationId(uuid(741)),
+    fundId: fund.id,
+    amount: money(50_000n),
+    effectiveAt: parseInstant('2026-04-03T09:00:00Z'),
+    kind: 'allocation',
+  });
+  return {
+    ...base,
+    canonical: {
+      ...base.canonical,
+      sinkingFunds: [fund],
+      sinkingFundAllocations: [allocation],
+    },
+  };
+}
+
+function withCashReconciliation(
+  base: FinancialEngineInput,
+  options: Readonly<{
+    materiality?: 'material' | 'non_material';
+    resolutionKind?: 'reclassified_adjustment' | 'reversed_adjustment' | null;
+    reversalAmount?: bigint;
+    reversalAccountId?: typeof BANK_ID;
+    reversalCurrency?: CurrencyCode;
+    reversalEffectiveAt?: string;
+    resolutionTransactionKind?: 'valuation_adjustment' | 'opening_balance';
+    includeUnrelatedReversalEntry?: boolean;
+  }> = {},
+): FinancialEngineInput {
+  const adjustmentTransactionId = parseTransactionId(uuid(750));
+  const reconciliationId = parseCashReconciliationId(uuid(751));
+  const reconciledAt = parseInstant('2026-06-05T08:00:00Z');
+  const adjustment = createCanonicalTransaction({
+    id: adjustmentTransactionId,
+    effectiveAt: reconciledAt,
+    bookingStatus: 'booked',
+    kind: 'valuation_adjustment',
+    entries: [
+      {
+        id: parseEntryId(uuid(752)),
+        transactionId: adjustmentTransactionId,
+        accountId: BANK_ID,
+        amount: money(-1_500n),
+        role: 'valuation_adjustment',
+      },
+    ],
+  });
+  const adjustmentFlow = createEconomicFlow({
+    id: parseEconomicFlowId(uuid(753)),
+    transactionId: adjustmentTransactionId,
+    effectiveAt: reconciledAt,
+    amount: money(-1_500n),
+    kind: 'cash_reconciliation_adjustment',
+  });
+  const reconciliation = createCashReconciliation({
+    id: reconciliationId,
+    accountId: BANK_ID,
+    calculatedBalance: money(14_000n),
+    countedBalance: money(12_500n),
+    variance: money(-1_500n),
+    reconciledAt,
+    actor: 'fixture-user',
+    reason: null,
+    materiality: options.materiality ?? 'non_material',
+    adjustmentTransactionId,
+  });
+  const resolutionKind = options.resolutionKind ?? null;
+  let resolutionTransaction: CanonicalTransaction | null = null;
+  if (resolutionKind === 'reversed_adjustment') {
+    const transactionId = parseTransactionId(uuid(754));
+    const kind = options.resolutionTransactionKind ?? 'valuation_adjustment';
+    resolutionTransaction = createCanonicalTransaction({
+      id: transactionId,
+      effectiveAt: parseInstant(options.reversalEffectiveAt ?? '2026-06-08T08:00:00Z'),
+      bookingStatus: 'booked',
+      kind,
+      entries: [
+        {
+          id: parseEntryId(uuid(755)),
+          transactionId,
+          accountId: options.reversalAccountId ?? BANK_ID,
+          amount: createMoney(options.reversalAmount ?? 1_500n, options.reversalCurrency ?? EUR),
+          role: kind === 'valuation_adjustment' ? 'valuation_adjustment' : 'opening_balance',
+        },
+        ...(options.includeUnrelatedReversalEntry === true && kind === 'valuation_adjustment'
+          ? [
+              {
+                id: parseEntryId(uuid(756)),
+                transactionId,
+                accountId: INVESTMENT_ID,
+                amount: money(700n),
+                role: 'valuation_adjustment' as const,
+              },
+            ]
+          : []),
+      ],
+    });
+  }
+  const resolution =
+    resolutionKind === null
+      ? null
+      : createCashReconciliationResolution({
+          kind: resolutionKind,
+          reconciliationId,
+          resolvedAt: parseInstant('2026-06-10T08:00:00Z'),
+          resolutionTransactionId:
+            resolutionKind === 'reclassified_adjustment'
+              ? adjustmentTransactionId
+              : resolutionTransaction!.id,
+        });
+  return {
+    ...base,
+    canonical: {
+      ...base.canonical,
+      transactions: [
+        ...base.canonical.transactions,
+        adjustment,
+        ...(resolutionTransaction === null ? [] : [resolutionTransaction]),
+      ],
+      economicFlows: [...base.canonical.economicFlows, adjustmentFlow],
+      cashReconciliations: [reconciliation],
+      cashReconciliationResolutions: resolution === null ? [] : [resolution],
+    },
+  };
+}
+
 describe('financial state orchestration', () => {
   it('derives complete, provisional, and blocked investability from structured facts', () => {
     const complete = evaluateFinancialState(input());
@@ -598,6 +790,204 @@ describe('financial state orchestration', () => {
     expect(result.ccr.value?.recognizedIncome.amountMinor).toBe(300_000n);
   });
 
+  it('derives historical consumption and Sinking protection from root canonical history', () => {
+    const base = evaluateFinancialState(inputWithSalaryHistory());
+    const withConsumption = evaluateFinancialState(
+      withHistoricalConsumption(inputWithSalaryHistory()),
+    );
+    const withSinking = evaluateFinancialState(
+      withHistoricalSinkingAllocation(inputWithSalaryHistory()),
+    );
+    const baseFirst =
+      base.historicalInvestmentCapacity.value!.observations[0]!.preClosingRecommendedSafeToInvest!
+        .amountMinor;
+    expect(
+      withConsumption.historicalInvestmentCapacity.value!.observations[0]!
+        .preClosingRecommendedSafeToInvest!.amountMinor,
+    ).toBeLessThan(baseFirst);
+    expect(
+      withSinking.historicalInvestmentCapacity.value!.observations[0]!
+        .preClosingRecommendedSafeToInvest!.amountMinor,
+    ).toBe(baseFirst - 50_000n);
+  });
+
+  it('cannot hide canonical material ambiguity from historical capacity', () => {
+    const base = inputWithSalaryHistory();
+    const transactionId = parseTransactionId(uuid(760));
+    const effectiveAt = parseInstant('2026-06-10T08:00:00Z');
+    const transaction = createCanonicalTransaction({
+      id: transactionId,
+      effectiveAt,
+      bookingStatus: 'booked',
+      kind: 'external_flow',
+      entries: [
+        {
+          id: parseEntryId(uuid(761)),
+          transactionId,
+          accountId: BANK_ID,
+          amount: money(-10_000n),
+          role: 'external_flow',
+        },
+      ],
+    });
+    const ambiguity = createFlowAmbiguity({
+      transactionId,
+      effectiveAt,
+      kind: 'unresolved_transfer',
+      materiality: 'material',
+    });
+    const result = evaluateFinancialState({
+      ...base,
+      canonical: {
+        ...base.canonical,
+        transactions: [...base.canonical.transactions, transaction],
+        ambiguities: [ambiguity],
+      },
+    });
+    expect(result.historicalInvestmentCapacity.status).toBe('partial');
+    expect(
+      result.historicalInvestmentCapacity.value?.observations.some((item) =>
+        item.issues.includes('missing_cycle_readiness'),
+      ),
+    ).toBe(true);
+  });
+
+  it('cannot hide an active material reconciliation from historical capacity', () => {
+    const result = evaluateFinancialState(
+      withCashReconciliation(inputWithSalaryHistory(), { materiality: 'material' }),
+    );
+    expect(result.historicalInvestmentCapacity.status).toBe('partial');
+    expect(
+      result.historicalInvestmentCapacity.value?.observations.some((item) =>
+        item.issues.includes('missing_cycle_readiness'),
+      ),
+    ).toBe(true);
+    expect(result.safeToInvest.status).toBe('unavailable');
+    expect(result.cashDrag.status).toBe('unavailable');
+    expect(result.investmentContributionDecision.value?.kind).not.toBe('step_up');
+  });
+
+  it('keeps a reconciliation active through resolvedAt and validates both resolution mechanisms', () => {
+    const reclassified = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reclassified_adjustment',
+    });
+    expect(
+      projectCanonicalFinancialFactsAt(reclassified.canonical, parseInstant('2026-06-05T23:59:59Z'))
+        .cashReconciliations,
+    ).toHaveLength(1);
+    expect(
+      projectCanonicalFinancialFactsAt(reclassified.canonical, parseInstant('2026-06-09T23:59:59Z'))
+        .cashReconciliations,
+    ).toHaveLength(1);
+    expect(
+      projectCanonicalFinancialFactsAt(reclassified.canonical, parseInstant('2026-06-15T00:00:00Z'))
+        .cashReconciliations,
+    ).toHaveLength(0);
+
+    const reversed = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reversed_adjustment',
+      includeUnrelatedReversalEntry: true,
+    });
+    expect(
+      projectCanonicalFinancialFactsAt(reversed.canonical, parseInstant('2026-06-15T00:00:00Z'))
+        .cashReconciliations,
+    ).toHaveLength(0);
+  });
+
+  it('rejects a reclassification that references a different transaction', () => {
+    const base = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reclassified_adjustment',
+    });
+    expect(() =>
+      projectCanonicalFinancialFactsAt(
+        {
+          ...base.canonical,
+          cashReconciliationResolutions: [
+            {
+              ...base.canonical.cashReconciliationResolutions[0]!,
+              resolutionTransactionId: base.canonical.transactions[0]!.id,
+            },
+          ],
+        },
+        parseInstant('2026-06-15T00:00:00Z'),
+      ),
+    ).toThrowError(/adjustment transaction itself/u);
+  });
+
+  it('validates the original adjustment even when the reconciliation is resolved', () => {
+    const base = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reclassified_adjustment',
+    });
+    expect(() =>
+      projectCanonicalFinancialFactsAt(
+        {
+          ...base.canonical,
+          cashReconciliations: [
+            {
+              ...base.canonical.cashReconciliations[0]!,
+              adjustmentTransactionId: base.canonical.transactions[0]!.id,
+            },
+          ],
+        },
+        parseInstant('2026-06-15T00:00:00Z'),
+      ),
+    ).toThrowError(/booked audited adjustment/u);
+  });
+
+  it('rejects duplicate resolution facts for one reconciliation', () => {
+    const base = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reclassified_adjustment',
+    });
+    expect(() =>
+      projectCanonicalFinancialFactsAt(
+        {
+          ...base.canonical,
+          cashReconciliationResolutions: [
+            base.canonical.cashReconciliationResolutions[0]!,
+            base.canonical.cashReconciliationResolutions[0]!,
+          ],
+        },
+        parseInstant('2026-06-15T00:00:00Z'),
+      ),
+    ).toThrowError(/only one active resolution/u);
+  });
+
+  it.each([
+    ['wrong amount', { reversalAmount: 1_499n }, /exactly negate/u],
+    ['wrong account', { reversalAccountId: INVESTMENT_ID }, /exactly negate/u],
+    ['wrong currency', { reversalCurrency: parseCurrencyCode('USD') }, /exactly negate/u],
+    [
+      'unrelated transaction',
+      { resolutionTransactionKind: 'opening_balance' },
+      /valuation adjustment/u,
+    ],
+    ['premature reversal', { reversalEffectiveAt: '2026-06-04T08:00:00Z' }, /resolution interval/u],
+  ] as const)('rejects a %s as reconciliation reversal proof', (_label, override, expected) => {
+    const base = withCashReconciliation(inputWithSalaryHistory(), {
+      resolutionKind: 'reversed_adjustment',
+      ...override,
+    });
+    expect(() =>
+      projectCanonicalFinancialFactsAt(base.canonical, parseInstant('2026-06-15T00:00:00Z')),
+    ).toThrowError(expected);
+  });
+
+  it('keeps non-material cash variance provisional until its valid resolution instant', () => {
+    const unresolved = evaluateFinancialState(withCashReconciliation(inputWithSalaryHistory()));
+    const resolved = evaluateFinancialState(
+      withCashReconciliation(inputWithSalaryHistory(), {
+        resolutionKind: 'reclassified_adjustment',
+      }),
+    );
+    expect(unresolved.investabilityReadiness).toEqual({
+      kind: 'provisional',
+      reasons: ['non_material_cash_variance'],
+    });
+    expect(unresolved.safeToInvest.status).toBe('partial');
+    expect(resolved.investabilityReadiness).toEqual({ kind: 'complete' });
+    expect(resolved.safeToInvest.status).toBe('complete');
+  });
+
   it('produces one coherent golden state across every Stage 2 branch', () => {
     const result = evaluateFinancialState(integratedInput());
     expect(result.netWorth.status).toBe('complete');
@@ -658,28 +1048,6 @@ describe('financial state orchestration', () => {
     );
   });
 
-  it('rejects a historical checkpoint that contradicts canonical source facts', () => {
-    const base = inputWithSalaryHistory();
-    const checkpoint = base.historicalCheckpoints[0]!;
-    const firstFlow = checkpoint.variables.economicFlows[0]!;
-    const changedFlow = { ...firstFlow, amount: money(firstFlow.amount.amountMinor + 1n) };
-    expect(() =>
-      evaluateFinancialState({
-        ...base,
-        historicalCheckpoints: [
-          {
-            ...checkpoint,
-            variables: {
-              ...checkpoint.variables,
-              economicFlows: [changedFlow, ...checkpoint.variables.economicFlows.slice(1)],
-            },
-          },
-          ...base.historicalCheckpoints.slice(1),
-        ],
-      }),
-    ).toThrowError(/exact subsets/u);
-  });
-
   it('is deterministic and invariant to semantically unordered projection rows', () => {
     const original = input();
     const reversed: FinancialEngineInput = {
@@ -691,6 +1059,29 @@ describe('financial state orchestration', () => {
     };
     expect(evaluateFinancialState(reversed)).toEqual(evaluateFinancialState(original));
     expect(evaluateFinancialState(original)).toEqual(evaluateFinancialState(original));
+  });
+
+  it('is invariant to canonical variable-fact and resolution ordering', () => {
+    const original = withCashReconciliation(
+      withHistoricalSinkingAllocation(withHistoricalConsumption(inputWithSalaryHistory())),
+      { resolutionKind: 'reversed_adjustment' },
+    );
+    const reversed: FinancialEngineInput = {
+      ...original,
+      canonical: {
+        ...original.canonical,
+        economicFlows: [...original.canonical.economicFlows].reverse(),
+        ambiguities: [...original.canonical.ambiguities].reverse(),
+        cashReconciliations: [...original.canonical.cashReconciliations].reverse(),
+        cashReconciliationResolutions: [
+          ...original.canonical.cashReconciliationResolutions,
+        ].reverse(),
+        sinkingFunds: [...original.canonical.sinkingFunds].reverse(),
+        sinkingFundAllocations: [...original.canonical.sinkingFundAllocations].reverse(),
+        spendingObservations: [...original.canonical.spendingObservations].reverse(),
+      },
+    };
+    expect(evaluateFinancialState(reversed)).toEqual(evaluateFinancialState(original));
   });
 
   it('builds Cash Drag observations from historical liquidity without upgrading partial days', () => {
@@ -706,14 +1097,6 @@ describe('financial state orchestration', () => {
           ...base.current.quality.liquidityInputs,
           operationalNeeds: 'partial' as const,
         },
-      },
-      variables: {
-        economicFlows: base.canonical.economicFlows,
-        ambiguities: base.canonical.ambiguities,
-        cashReconciliations: base.canonical.cashReconciliations,
-        sinkingFunds: base.canonical.sinkingFunds,
-        sinkingFundAllocations: base.canonical.sinkingFundAllocations,
-        spendingObservations: base.canonical.spendingObservations,
       },
     };
     const result = evaluateFinancialState({ ...base, historicalCheckpoints: [checkpoint] });

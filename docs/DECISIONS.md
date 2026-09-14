@@ -280,6 +280,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** `packages/financial-engine` may depend only on `@personal-cfo/domain` and the explicitly reviewed `decimal.js` package. Decimal objects stay private and outputs use canonical rate strings. Historical checkpoint assembly must retain effective settings and complete source facts; stored prior-version snapshot reproduction remains a future persistence concern.
 
+## ADR-024 — Cutoff-Derived History and Verifiable Cash-Reconciliation Resolution
+
+**Status:** Accepted — 2026-09-14
+
+**Decision:** Historical checkpoints carry planning, coverage, and quality context only. At every inclusive cutoff, the engine derives booked economic flows, active ambiguities and reconciliations, Sinking Funds, allocations, and linked spending observations from one root canonical history and sorts them by time and stable identity. Cash reconciliation resolution is either same-adjustment reclassification or a distinct booked valuation-adjustment reversal. A reversal is valid only when its entries on the reconciled account exactly negate the variance in the same currency. Resolution affects active state only from `resolvedAt`.
+
+**Reasoning:** A checkpoint-owned copy of financial history can omit material evidence and manufacture authoritative historical liquidity or Safe to Invest. A generic resolution link can likewise clear an unexplained variance without proving the economic correction. Cutoff projection and exact account-level reversal proof make both authority boundaries deterministic and auditable.
+
+**Alternatives:** Trusting checkpoint subsets leaves omission authority with the caller. Clearing at reversal-transaction time contradicts the explicit resolution lifecycle. Requiring a single-entry reversal would reject valid multi-entry adjustments; counting entries from other accounts would falsely prove correction.
+
+**Consequences:** Canonical evidence overrides optimistic checkpoint completeness. Original reconciliation adjustments are validated even after resolution, prior cutoffs retain the blocker, and resolved adjustment records remain immutable audit history while leaving active metric projections. Ambiguities remain active because Stage 2 has no ambiguity-resolution lifecycle; reclassification records provenance without adding classification history.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

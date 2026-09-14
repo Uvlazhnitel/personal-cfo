@@ -1,5 +1,6 @@
 import {
   createCashDragDailyObservation,
+  createCashReconciliation,
   createCashReconciliationResolution,
   createFlowAmbiguity,
   createInvestabilityReadiness,
@@ -128,8 +129,7 @@ export type FinancialVariableFacts = Readonly<{
   spendingObservations: readonly SpendingObservation[];
 }>;
 
-export type FinancialCheckpointFacts = Readonly<{
-  variables: FinancialVariableFacts;
+export type FinancialCheckpointContext = Readonly<{
   monthCoverage: readonly CalendarMonthCoverage[];
   scheduledRecurring: readonly ScheduledSpending[];
   recurringScheduleComplete: boolean;
@@ -144,8 +144,8 @@ export type FinancialCheckpointFacts = Readonly<{
 }>;
 
 export type HistoricalFinancialCheckpoint = Readonly<
-  | ({ kind: 'cash_drag_day'; date: LocalDate } & FinancialCheckpointFacts)
-  | ({ kind: 'pre_closing'; payCycleId: PayCycleId } & FinancialCheckpointFacts)
+  | ({ kind: 'cash_drag_day'; date: LocalDate } & FinancialCheckpointContext)
+  | ({ kind: 'pre_closing'; payCycleId: PayCycleId } & FinancialCheckpointContext)
 >;
 
 export type FinancialEngineCanonicalFacts = LedgerInput &
@@ -168,7 +168,7 @@ export type FinancialEngineInput = Readonly<{
   run: FinancialEngineRun;
   settingsHistory: readonly FinancialEngineSettings[];
   canonical: FinancialEngineCanonicalFacts;
-  current: Omit<FinancialCheckpointFacts, 'variables'>;
+  current: FinancialCheckpointContext;
   historicalCheckpoints: readonly HistoricalFinancialCheckpoint[];
   ccrPeriod: MeasurementPeriod;
   rollingCcrPeriods: readonly MeasurementPeriod[];
@@ -245,72 +245,6 @@ function warning(code: string, context: Readonly<Record<string, string>> = {}): 
 function requireUnique(values: readonly string[], code: string, message: string): void {
   if (new Set(values).size !== values.length)
     throw new FinancialEngineInvariantError(code, message);
-}
-
-function structurallyEqual(left: unknown, right: unknown): boolean {
-  if (Object.is(left, right)) return true;
-  if (Array.isArray(left) || Array.isArray(right)) {
-    return (
-      Array.isArray(left) &&
-      Array.isArray(right) &&
-      left.length === right.length &&
-      left.every((item, index) => structurallyEqual(item, right[index]))
-    );
-  }
-  if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object')
-    return false;
-  const leftRecord = left as Readonly<Record<string, unknown>>;
-  const rightRecord = right as Readonly<Record<string, unknown>>;
-  const keys = Object.keys(leftRecord).sort();
-  return (
-    keys.length === Object.keys(rightRecord).length &&
-    keys.every(
-      (key) =>
-        Object.prototype.hasOwnProperty.call(rightRecord, key) &&
-        structurallyEqual(leftRecord[key], rightRecord[key]),
-    )
-  );
-}
-
-function validateCheckpointCanonicalFacts(input: FinancialEngineInput): void {
-  const validateSubset = <T>(
-    values: readonly T[],
-    canonical: readonly T[],
-    identity: (value: T) => string,
-  ) => {
-    const byId = new Map(canonical.map((item) => [identity(item), item]));
-    return values.every((item) => {
-      const expected = byId.get(identity(item));
-      return expected !== undefined && structurallyEqual(item, expected);
-    });
-  };
-  for (const checkpoint of input.historicalCheckpoints) {
-    const variables = checkpoint.variables;
-    if (
-      !validateSubset(variables.economicFlows, input.canonical.economicFlows, (item) => item.id) ||
-      !validateSubset(
-        variables.cashReconciliations,
-        input.canonical.cashReconciliations,
-        (item) => item.id,
-      ) ||
-      !validateSubset(variables.sinkingFunds, input.canonical.sinkingFunds, (item) => item.id) ||
-      !validateSubset(
-        variables.sinkingFundAllocations,
-        input.canonical.sinkingFundAllocations,
-        (item) => item.id,
-      ) ||
-      !validateSubset(
-        variables.spendingObservations,
-        input.canonical.spendingObservations,
-        (item) => item.economicFlowId,
-      )
-    ) {
-      throw new FinancialEngineInvariantError(
-        'orchestration.checkpoint_canonical_mismatch',
-        'Historical checkpoint facts must be exact subsets of the canonical run facts.',
-      );
-    }
-  }
 }
 
 function localPartsMilliseconds(
@@ -463,36 +397,146 @@ function validateBookedFlows(
   }
 }
 
-function validateCashReconciliationResolutions(
+type ValidatedCashReconciliationHistory = Readonly<{
+  reconciliations: readonly CashReconciliation[];
+  resolutions: readonly CashReconciliationResolution[];
+}>;
+
+function validateCashReconciliationHistory(
   canonical: FinancialEngineCanonicalFacts,
-): readonly CashReconciliationResolution[] {
+): ValidatedCashReconciliationHistory {
+  let reconciliations: readonly CashReconciliation[];
+  try {
+    reconciliations = Object.freeze(
+      canonical.cashReconciliations.map((item) => createCashReconciliation(item)),
+    );
+  } catch (error) {
+    throw new FinancialEngineInvariantError(
+      'orchestration.invalid_reconciliation',
+      `Cash reconciliation history is invalid: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
+  }
   const resolutions = canonical.cashReconciliationResolutions.map((item) =>
     createCashReconciliationResolution(item),
+  );
+  requireUnique(
+    reconciliations.map((item) => item.id),
+    'orchestration.duplicate_reconciliation_id',
+    'Cash reconciliation IDs must be unique.',
+  );
+  requireUnique(
+    reconciliations.map((item) => item.adjustmentTransactionId),
+    'orchestration.duplicate_reconciliation_adjustment',
+    'An adjustment transaction can belong to only one cash reconciliation.',
   );
   requireUnique(
     resolutions.map((item) => item.reconciliationId),
     'orchestration.duplicate_reconciliation_resolution',
     'A cash reconciliation can have only one active resolution fact.',
   );
-  const reconciliations = new Map(canonical.cashReconciliations.map((item) => [item.id, item]));
+  const reconciliationById = new Map(reconciliations.map((item) => [item.id, item]));
+  const accounts = new Map(canonical.accounts.map((item) => [item.id, item]));
   const transactions = new Map(canonical.transactions.map((item) => [item.id, item]));
-  for (const resolution of resolutions) {
-    const reconciliation = reconciliations.get(resolution.reconciliationId);
-    const transaction = transactions.get(resolution.resolutionTransactionId);
+  const adjustmentFlows = new Map(
+    canonical.economicFlows
+      .filter((item) => item.kind === 'cash_reconciliation_adjustment')
+      .map((item) => [item.transactionId, item]),
+  );
+  for (const reconciliation of reconciliations) {
+    const account = accounts.get(reconciliation.accountId);
+    const transaction = transactions.get(reconciliation.adjustmentTransactionId);
+    const entry = transaction?.entries[0];
+    const flow = adjustmentFlows.get(reconciliation.adjustmentTransactionId);
+    if (account?.subtype !== 'cash' || account.valueSource !== 'ledger') {
+      throw new FinancialEngineInvariantError(
+        'orchestration.invalid_reconciliation_account',
+        'Cash reconciliation must target a ledger-authoritative cash account.',
+      );
+    }
     if (
-      reconciliation === undefined ||
-      resolution.resolvedAt < reconciliation.reconciledAt ||
-      transaction === undefined ||
+      transaction?.kind !== 'valuation_adjustment' ||
       transaction.bookingStatus !== 'booked' ||
-      transaction.effectiveAt > resolution.resolvedAt
+      transaction.effectiveAt !== reconciliation.reconciledAt ||
+      transaction.entries.length !== 1 ||
+      entry?.accountId !== reconciliation.accountId ||
+      entry.amount.currency !== reconciliation.variance.currency ||
+      entry.amount.amountMinor !== reconciliation.variance.amountMinor ||
+      flow?.effectiveAt !== reconciliation.reconciledAt ||
+      flow.amount.currency !== reconciliation.variance.currency ||
+      flow.amount.amountMinor !== reconciliation.variance.amountMinor
     ) {
       throw new FinancialEngineInvariantError(
-        'orchestration.invalid_reconciliation_resolution',
-        'A resolution must follow its reconciliation and reference an existing booked transaction.',
+        'orchestration.invalid_reconciliation_adjustment',
+        'Cash reconciliation must match one booked audited adjustment and flow exactly.',
       );
     }
   }
-  return Object.freeze(resolutions);
+  if (adjustmentFlows.size !== reconciliations.length) {
+    throw new FinancialEngineInvariantError(
+      'orchestration.missing_reconciliation',
+      'Every cash reconciliation adjustment flow requires one reconciliation record.',
+    );
+  }
+  for (const resolution of resolutions) {
+    const reconciliation = reconciliationById.get(resolution.reconciliationId);
+    const transaction = transactions.get(resolution.resolutionTransactionId);
+    if (reconciliation === undefined || resolution.resolvedAt < reconciliation.reconciledAt) {
+      throw new FinancialEngineInvariantError(
+        'orchestration.invalid_reconciliation_resolution',
+        'A resolution must reference an existing reconciliation and cannot precede it.',
+      );
+    }
+    if (resolution.kind === 'reclassified_adjustment') {
+      if (resolution.resolutionTransactionId !== reconciliation.adjustmentTransactionId) {
+        throw new FinancialEngineInvariantError(
+          'orchestration.invalid_reclassification_transaction',
+          'Reclassification must reference the reconciliation adjustment transaction itself.',
+        );
+      }
+      continue;
+    }
+    if (
+      transaction === undefined ||
+      transaction.id === reconciliation.adjustmentTransactionId ||
+      transaction.bookingStatus !== 'booked' ||
+      transaction.kind !== 'valuation_adjustment' ||
+      transaction.effectiveAt < reconciliation.reconciledAt ||
+      transaction.effectiveAt > resolution.resolvedAt
+    ) {
+      throw new FinancialEngineInvariantError(
+        'orchestration.invalid_reversal_transaction',
+        'Reversal must reference a distinct booked valuation adjustment inside the resolution interval.',
+      );
+    }
+    const relevantEntries = transaction.entries.filter(
+      (entry) => entry.accountId === reconciliation.accountId,
+    );
+    if (
+      relevantEntries.length === 0 ||
+      relevantEntries.some((entry) => entry.amount.currency !== reconciliation.variance.currency) ||
+      relevantEntries.reduce((sum, entry) => sum + entry.amount.amountMinor, 0n) !==
+        -reconciliation.variance.amountMinor
+    ) {
+      throw new FinancialEngineInvariantError(
+        'orchestration.invalid_reversal_effect',
+        'Reversal entries on the reconciliation account must exactly negate the variance.',
+      );
+    }
+  }
+  return Object.freeze({
+    reconciliations: Object.freeze(
+      [...reconciliations].sort(
+        (a, b) => a.reconciledAt.localeCompare(b.reconciledAt) || a.id.localeCompare(b.id),
+      ),
+    ),
+    resolutions: Object.freeze(
+      [...resolutions].sort(
+        (a, b) =>
+          a.resolvedAt.localeCompare(b.resolvedAt) ||
+          a.reconciliationId.localeCompare(b.reconciliationId),
+      ),
+    ),
+  });
 }
 
 function filteredLedger(canonical: FinancialEngineCanonicalFacts, asOf: Instant): LedgerInput {
@@ -508,33 +552,72 @@ function filteredLedger(canonical: FinancialEngineCanonicalFacts, asOf: Instant)
 }
 
 function activeVariablesAt(
-  variables: FinancialVariableFacts,
+  canonical: FinancialEngineCanonicalFacts,
   asOf: Instant,
-  resolutions: readonly CashReconciliationResolution[],
+  reconciliationHistory: ValidatedCashReconciliationHistory,
 ): FinancialVariableFacts {
-  const economicFlows = variables.economicFlows.filter((item) => item.effectiveAt <= asOf);
+  const activeResolutions = reconciliationHistory.resolutions.filter(
+    (item) => item.resolvedAt <= asOf,
+  );
+  const resolvedReconciliationIds = new Set(activeResolutions.map((item) => item.reconciliationId));
+  const resolvedAdjustmentIds = new Set(
+    reconciliationHistory.reconciliations
+      .filter((item) => resolvedReconciliationIds.has(item.id))
+      .map((item) => item.adjustmentTransactionId),
+  );
+  const economicFlows = canonical.economicFlows
+    .filter((item) => item.effectiveAt <= asOf && !resolvedAdjustmentIds.has(item.transactionId))
+    .sort((a, b) => a.effectiveAt.localeCompare(b.effectiveAt) || a.id.localeCompare(b.id));
   const economicFlowIds = new Set(economicFlows.map((item) => item.id));
+  const flowInstants = new Map(economicFlows.map((item) => [item.id, item.effectiveAt]));
   return Object.freeze({
     economicFlows: Object.freeze(economicFlows),
-    ambiguities: Object.freeze(variables.ambiguities.filter((item) => item.effectiveAt <= asOf)),
+    ambiguities: Object.freeze(
+      canonical.ambiguities
+        .filter((item) => item.effectiveAt <= asOf)
+        .sort(
+          (a, b) =>
+            a.effectiveAt.localeCompare(b.effectiveAt) ||
+            a.transactionId.localeCompare(b.transactionId),
+        ),
+    ),
     cashReconciliations: Object.freeze(
-      variables.cashReconciliations.filter(
-        (item) =>
-          item.reconciledAt <= asOf &&
-          !resolutions.some(
-            (resolution) =>
-              resolution.reconciliationId === item.id && resolution.resolvedAt <= asOf,
-          ),
+      reconciliationHistory.reconciliations.filter(
+        (item) => item.reconciledAt <= asOf && !resolvedReconciliationIds.has(item.id),
       ),
     ),
-    sinkingFunds: Object.freeze(variables.sinkingFunds.filter((item) => item.createdAt <= asOf)),
+    sinkingFunds: Object.freeze(
+      canonical.sinkingFunds
+        .filter((item) => item.createdAt <= asOf)
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt) || a.id.localeCompare(b.id)),
+    ),
     sinkingFundAllocations: Object.freeze(
-      variables.sinkingFundAllocations.filter((item) => item.effectiveAt <= asOf),
+      canonical.sinkingFundAllocations
+        .filter((item) => item.effectiveAt <= asOf)
+        .sort((a, b) => a.effectiveAt.localeCompare(b.effectiveAt) || a.id.localeCompare(b.id)),
     ),
     spendingObservations: Object.freeze(
-      variables.spendingObservations.filter((item) => economicFlowIds.has(item.economicFlowId)),
+      canonical.spendingObservations
+        .filter((item) => economicFlowIds.has(item.economicFlowId))
+        .sort(
+          (a, b) =>
+            flowInstants
+              .get(a.economicFlowId)!
+              .localeCompare(flowInstants.get(b.economicFlowId)!) ||
+            a.economicFlowId.localeCompare(b.economicFlowId),
+        ),
     ),
   });
+}
+
+/** Derives all time-varying authoritative facts from one canonical root at an inclusive cutoff. */
+export function projectCanonicalFinancialFactsAt(
+  canonical: FinancialEngineCanonicalFacts,
+  cutoff: Instant,
+): FinancialVariableFacts {
+  const asOf = parseInstant(cutoff);
+  validateBookedFlows(canonical.transactions, canonical.economicFlows);
+  return activeVariablesAt(canonical, asOf, validateCashReconciliationHistory(canonical));
 }
 
 export function deriveInvestabilityReadiness(
@@ -613,20 +696,17 @@ export function deriveInvestabilityReadiness(
 
 function calculateCheckpoint(
   input: FinancialEngineInput,
-  facts: FinancialCheckpointFacts,
+  facts: FinancialCheckpointContext,
   asOf: Instant,
   effectiveDate: LocalDate,
   settings: FinancialEngineSettings,
   watermark: string,
+  reconciliationHistory: ValidatedCashReconciliationHistory,
   positionsOverride?: CurrentPositions,
 ): CalculatedCheckpoint {
   const run = { ...input.run, asOf, effectiveDate };
   const meta = metadata(run, settings.version, watermark);
-  const variables = activeVariablesAt(
-    facts.variables,
-    asOf,
-    input.canonical.cashReconciliationResolutions,
-  );
+  const variables = activeVariablesAt(input.canonical, asOf, reconciliationHistory);
   const ledger = filteredLedger(input.canonical, asOf);
   validateBookedFlows(ledger.transactions, variables.economicFlows);
   const positions =
@@ -758,20 +838,8 @@ export function evaluateFinancialState(input: FinancialEngineInput): FinancialEn
     );
   }
   validateBookedFlows(input.canonical.transactions, input.canonical.economicFlows);
-  validateCheckpointCanonicalFacts(input);
-  const reconciliationResolutions = validateCashReconciliationResolutions(input.canonical);
-  const currentVariables = activeVariablesAt(
-    {
-      economicFlows: input.canonical.economicFlows,
-      ambiguities: input.canonical.ambiguities,
-      cashReconciliations: input.canonical.cashReconciliations,
-      sinkingFunds: input.canonical.sinkingFunds,
-      sinkingFundAllocations: input.canonical.sinkingFundAllocations,
-      spendingObservations: input.canonical.spendingObservations,
-    },
-    run.asOf,
-    reconciliationResolutions,
-  );
+  const reconciliationHistory = validateCashReconciliationHistory(input.canonical);
+  const currentVariables = activeVariablesAt(input.canonical, run.asOf, reconciliationHistory);
   const meta = metadata(run);
   const positions = calculateCurrentPositions({
     accounts: input.canonical.accounts,
@@ -796,17 +864,14 @@ export function evaluateFinancialState(input: FinancialEngineInput): FinancialEn
     expectedPrimaryPaySchedule: input.current.expectedPrimaryPaySchedule,
     asOf: run.asOf,
   });
-  const currentFacts: FinancialCheckpointFacts = {
-    ...input.current,
-    variables: currentVariables,
-  };
   const current = calculateCheckpoint(
     input,
-    currentFacts,
+    input.current,
     run.asOf,
     run.effectiveDate,
     currentSettings,
     '',
+    reconciliationHistory,
     positions,
   );
   const ccrInput = {
@@ -854,6 +919,7 @@ export function evaluateFinancialState(input: FinancialEngineInput): FinancialEn
       date,
       checkpointSettings,
       `cash-drag:${date}`,
+      reconciliationHistory,
     );
     if (calculated.liquidity.value === null) continue;
     dailyObservations.push(
@@ -904,6 +970,7 @@ export function evaluateFinancialState(input: FinancialEngineInput): FinancialEn
       date,
       checkpointSettings,
       `pre-closing:${cycle.id}`,
+      reconciliationHistory,
     );
     const intervening = input.canonical.transactions.some(
       (item) =>

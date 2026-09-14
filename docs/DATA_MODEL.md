@@ -120,7 +120,9 @@ Telegram or PWA cash commands create canonical transactions with a client idempo
 
 `CashReconciliation` records Cash Account ID, calculated balance, physically counted balance, signed variance, reconciliation instant, actor, optional reason, materiality result, and the linked adjustment transaction. It never overwrites prior entries. The adjustment uses type `cash_reconciliation_adjustment`; it changes the account balance and Net Worth but is not ordinary consumption or recognized income.
 
-`CashReconciliationResolution` is immutable evidence that an unexplained variance ceased to be active. It records the reconciliation ID, resolution instant, and booked resolution transaction ID. Historical evaluations before that instant retain the ambiguity; later evaluations exclude it from the investability blocker while preserving both audit records.
+`CashReconciliationResolution` is immutable evidence that an unexplained variance ceased to be active. It is an explicit union: `reclassified_adjustment` references the original booked adjustment transaction, while `reversed_adjustment` references a distinct booked `valuation_adjustment`. A reversal must occur no earlier than reconciliation and no later than `resolvedAt`; entries on the reconciliation account must sum exactly to the negative variance in the same currency. Other entries may coexist but do not contribute to that proof.
+
+Resolution does not erase or overwrite either record. The reconciliation remains active for every historical cutoff before `resolvedAt`, even when a reversal transaction already exists, and becomes inactive only at or after `resolvedAt`. Duplicate resolutions, malformed original adjustments, unrelated transactions, and wrong-account, currency, or amount reversals are invalid canonical state.
 
 If a forgotten transaction is identified later, either reclassify the adjustment itself with added details or reverse the adjustment before adding the recovered transaction. Both paths preserve the audit trail and ensure the balance changes only once.
 
