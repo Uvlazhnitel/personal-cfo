@@ -13,6 +13,7 @@ import {
   createMoney,
   parseAccountId,
   parseCashReconciliationId,
+  parseCurrencyCode,
   parseEconomicFlowId,
   parseEntryId,
   parseInstant,
@@ -193,6 +194,16 @@ function requireValue(result: ReturnType<typeof calculateCapitalConversionRate>)
   expect(result.value).not.toBeNull();
   if (result.value === null) throw new Error('Expected CCR value.');
   return result.value;
+}
+
+function expectInvariantCode(operation: () => unknown, code: string): void {
+  try {
+    operation();
+    throw new Error(`Expected ${code}.`);
+  } catch (error) {
+    expect(error).toBeInstanceOf(FinancialEngineInvariantError);
+    expect((error as FinancialEngineInvariantError).code).toBe(code);
+  }
 }
 
 describe('capital conversion rate', () => {
@@ -634,5 +645,283 @@ describe('capital conversion rate', () => {
       .reduce((sum, item) => sum + BigInt(item.value), 0n);
 
     expect(operands).toBe(result.value?.capitalCreated.amountMinor);
+  });
+
+  describe('Stage 4 canonical input verification', () => {
+    it('rejects invalid flow linkage, reporting currency, entry currency, and amount', () => {
+      const purchase = external(80, -1_000n);
+      const purchaseFlow = flow(80, purchase, { kind: 'consumption', amount: 1_000n });
+      const transfer = transaction(81, 'internal_transfer', [
+        { account: bank, amount: -1_000n, role: 'transfer_source' },
+        { account: cash, amount: 1_000n, role: 'transfer_destination' },
+      ]);
+      const transferFlow = createEconomicFlow({
+        ...purchaseFlow,
+        id: parseEconomicFlowId(uuid(1_080)),
+        transactionId: transfer.id,
+        effectiveAt: transfer.effectiveAt,
+      });
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([transfer], [transferFlow])),
+        'capital_conversion.invalid_flow_transaction',
+      );
+
+      const usd = parseCurrencyCode('USD');
+      const usdFlow = createEconomicFlow({
+        ...purchaseFlow,
+        amount: createMoney(1_000n, usd),
+      });
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([purchase], [usdFlow])),
+        'capital_conversion.reporting_currency_mismatch',
+      );
+
+      const usdAccount = createAccount({
+        id: parseAccountId(uuid(1_081)),
+        subtype: 'cash',
+        currency: usd,
+        includeInNetWorth: true,
+        valueSource: 'ledger',
+        brokerageCashFor: null,
+      });
+      const usdTransactionId = parseTransactionId(uuid(1_082));
+      const usdTransaction = createCanonicalTransaction({
+        id: usdTransactionId,
+        effectiveAt: IN_PERIOD,
+        bookingStatus: 'booked',
+        kind: 'external_flow',
+        entries: [
+          createAccountEntry({
+            id: parseEntryId(uuid(1_083)),
+            transactionId: usdTransactionId,
+            accountId: usdAccount.id,
+            amount: createMoney(-1_000n, usd),
+            role: 'external_flow',
+          }),
+        ],
+      });
+      const canonicalEurFlow = createEconomicFlow({
+        ...purchaseFlow,
+        id: parseEconomicFlowId(uuid(1_084)),
+        transactionId: usdTransaction.id,
+      });
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated({
+            ...input([usdTransaction], [canonicalEurFlow]),
+            accounts: [usdAccount],
+          }),
+        'capital_conversion.entry_currency_mismatch',
+      );
+
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated(
+            input(
+              [purchase],
+              [createEconomicFlow({ ...purchaseFlow, amount: createMoney(999n, EUR) })],
+            ),
+          ),
+        'capital_conversion.flow_amount_mismatch',
+      );
+    });
+
+    it('rejects invalid reversal targets and cumulative over-reversal', () => {
+      const incomeTransaction = external(82, 10_000n);
+      const refundTransaction = external(83, 1_000n);
+      const incomeFlow = flow(82, incomeTransaction, { kind: 'earned_income', amount: 10_000n });
+      const refundFlow = flow(83, refundTransaction, {
+        kind: 'refund',
+        amount: 1_000n,
+        relatedTransactionId: incomeTransaction.id,
+      });
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated(
+            input([incomeTransaction, refundTransaction], [incomeFlow, refundFlow]),
+          ),
+        'capital_conversion.invalid_reversal_target',
+      );
+
+      const expense = external(84, -1_000n);
+      const reimbursement = external(85, 1_001n);
+      const expenseFlow = flow(84, expense, {
+        kind: 'consumption',
+        amount: 1_000n,
+        reimbursable: true,
+      });
+      const reimbursementFlow = flow(85, reimbursement, {
+        kind: 'reimbursement',
+        amount: 1_001n,
+        relatedTransactionId: expense.id,
+      });
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated(
+            input([expense, reimbursement], [expenseFlow, reimbursementFlow]),
+          ),
+        'capital_conversion.reversal_exceeds_consumption',
+      );
+    });
+
+    it('rejects a runtime-mutable reversal currency at the defensive validation boundary', () => {
+      const expense = external(92, -1_000n);
+      const refund = external(93, 500n);
+      const expenseFlow = flow(92, expense, {
+        kind: 'consumption',
+        amount: 1_000n,
+      });
+      const stableRefund = flow(93, refund, {
+        kind: 'refund',
+        amount: 500n,
+        relatedTransactionId: expense.id,
+      });
+      const usd = parseCurrencyCode('USD');
+      let currencyReads = 0;
+      const unstableRefund = {
+        ...stableRefund,
+        amount: {
+          amountMinor: 500n,
+          get currency() {
+            currencyReads += 1;
+            return currencyReads === 1 ? EUR : usd;
+          },
+        },
+      } as EconomicFlow;
+      const adversarialCollection = {
+        map: () => [expenseFlow, unstableRefund],
+      } as unknown as readonly EconomicFlow[];
+
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated({
+            ...input([expense, refund], []),
+            economicFlows: adversarialCollection,
+          }),
+        'capital_conversion.reversal_currency_mismatch',
+      );
+    });
+
+    it('rejects invalid ambiguity references and classification conflicts', () => {
+      const transfer = transaction(86, 'internal_transfer', [
+        { account: bank, amount: -1_000n, role: 'transfer_source' },
+        { account: cash, amount: 1_000n, role: 'transfer_destination' },
+      ]);
+      const invalidReference = createFlowAmbiguity({
+        transactionId: transfer.id,
+        effectiveAt: transfer.effectiveAt,
+        kind: 'unresolved_transfer',
+        materiality: 'material',
+      });
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([transfer], [], { ambiguities: [invalidReference] })),
+        'capital_conversion.invalid_ambiguity_transaction',
+      );
+
+      const unknown = external(87, -1_000n);
+      const classified = flow(87, unknown, { kind: 'consumption', amount: 1_000n });
+      const conflict = createFlowAmbiguity({
+        transactionId: unknown.id,
+        effectiveAt: unknown.effectiveAt,
+        kind: 'unresolved_transfer',
+        materiality: 'material',
+      });
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([unknown], [classified], { ambiguities: [conflict] })),
+        'capital_conversion.ambiguity_conflicts_with_flow',
+      );
+    });
+
+    it('rejects invalid reconciliation account, adjustment, and missing record', () => {
+      const bankAdjustment = transaction(88, 'valuation_adjustment', [
+        { account: bank, amount: -1_500n, role: 'valuation_adjustment' },
+      ]);
+      const bankFlow = flow(88, bankAdjustment, {
+        kind: 'cash_reconciliation_adjustment',
+        amount: -1_500n,
+      });
+      const bankReconciliation = createCashReconciliation({
+        id: parseCashReconciliationId(uuid(1_088)),
+        accountId: bank.id,
+        calculatedBalance: createMoney(14_000n, EUR),
+        countedBalance: createMoney(12_500n, EUR),
+        variance: createMoney(-1_500n, EUR),
+        reconciledAt: bankAdjustment.effectiveAt,
+        actor: 'local-user',
+        reason: null,
+        materiality: 'material',
+        adjustmentTransactionId: bankAdjustment.id,
+      });
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated(
+            input([bankAdjustment], [bankFlow], { cashReconciliations: [bankReconciliation] }),
+          ),
+        'capital_conversion.invalid_reconciliation_account',
+      );
+
+      const cashAdjustment = transaction(89, 'valuation_adjustment', [
+        { account: cash, amount: -1_499n, role: 'valuation_adjustment' },
+      ]);
+      const cashFlow = flow(89, cashAdjustment, {
+        kind: 'cash_reconciliation_adjustment',
+        amount: -1_499n,
+      });
+      const cashReconciliation = createCashReconciliation({
+        ...bankReconciliation,
+        id: parseCashReconciliationId(uuid(1_089)),
+        accountId: cash.id,
+        reconciledAt: cashAdjustment.effectiveAt,
+        adjustmentTransactionId: cashAdjustment.id,
+      });
+      expectInvariantCode(
+        () =>
+          calculateCapitalCreated(
+            input([cashAdjustment], [cashFlow], { cashReconciliations: [cashReconciliation] }),
+          ),
+        'capital_conversion.invalid_reconciliation_adjustment',
+      );
+
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([cashAdjustment], [cashFlow])),
+        'capital_conversion.missing_reconciliation',
+      );
+    });
+
+    it('rejects future periods and keeps neutral outflows visible', () => {
+      const futurePeriod = createMeasurementPeriod({
+        startInclusive: AS_OF,
+        endExclusive: parseInstant('2026-10-02T00:00:00Z'),
+      });
+      expectInvariantCode(
+        () => calculateCapitalCreated(input([], [], { period: futurePeriod })),
+        'capital_conversion.period_after_as_of',
+      );
+
+      const outflow = external(90, -2_500n);
+      const result = calculateCapitalCreated(
+        input([outflow], [flow(90, outflow, { kind: 'other_external_flow', amount: -2_500n })]),
+      );
+      expect(result.value?.otherExternalOutflows.amountMinor).toBe(2_500n);
+      expect(result.value?.capitalCreated.amountMinor).toBe(0n);
+    });
+
+    it('does not upgrade a pre-existing unavailable result for non-material ambiguity', () => {
+      const unknown = external(91, -1_000n);
+      const ambiguity = createFlowAmbiguity({
+        transactionId: unknown.id,
+        effectiveAt: unknown.effectiveAt,
+        kind: 'unresolved_transfer',
+        materiality: 'non_material',
+      });
+      const incompleteCoverage = createMeasurementPeriod({
+        startInclusive: parseInstant('2026-09-02T00:00:00Z'),
+        endExclusive: SEPTEMBER.endExclusive,
+      });
+      const result = calculateCapitalConversionRate(
+        input([unknown], [], { ambiguities: [ambiguity], historyCoverage: incompleteCoverage }),
+      );
+      expect(result.status).toBe('unavailable');
+    });
   });
 });

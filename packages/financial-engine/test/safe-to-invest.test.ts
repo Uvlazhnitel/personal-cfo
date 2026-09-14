@@ -344,4 +344,43 @@ describe('Safe to Invest', () => {
       calculateSafeToInvest(input(metric(liquidity(720_000n, 540_000n, 530_000n, 20_000n)))),
     ).toThrow('Minimum cash cannot exceed comfort cash');
   });
+
+  it('rejects invalid liquidity values, excess reconciliation, and upstream metadata', () => {
+    expect(() => calculateSafeToInvest(input(metric(liquidity(-1n, 0n, 0n, 0n))))).toThrow(
+      'non-negative EUR liquidity',
+    );
+
+    const invalidExcess = {
+      ...liquidity(720_000n, 470_000n, 530_000n, 20_000n),
+      currentExcessAboveComfort: createMoney(0n, EUR),
+    };
+    expect(() => calculateSafeToInvest(input(metric(invalidExcess)))).toThrow(
+      'Current excess must reconcile',
+    );
+
+    expect(() =>
+      calculateSafeToInvest(
+        input(metric(liquidity(720_000n, 470_000n, 530_000n, 20_000n)), {
+          settingsVersion: 'settings-2',
+        }),
+      ),
+    ).toThrow('must share the Safe to Invest as-of and settings version');
+  });
+
+  it('rejects a runtime-mutable upstream value that violates tier ordering after validation', () => {
+    const stable = liquidity(600_000n, 450_000n, 500_000n, 20_000n);
+    const adversarial = { ...stable };
+    let minimumReads = 0;
+    Object.defineProperty(adversarial, 'minimumCash', {
+      enumerable: true,
+      get() {
+        minimumReads += 1;
+        return createMoney(minimumReads < 3 ? 450_000n : 550_000n, EUR);
+      },
+    });
+
+    expect(() => calculateSafeToInvest(input(metric(adversarial)))).toThrow(
+      'tiers must be ordered',
+    );
+  });
 });

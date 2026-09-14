@@ -32,7 +32,9 @@ import type {
 import {
   FinancialEngineInvariantError,
   calculateCurrentCycleSinkingDue,
+  calculateFundedConsumptionCoverage,
   calculateNetWorth,
+  calculateReservationEffect,
   calculateReservedCash,
   calculateSinkingFundSchedule,
 } from '../src/index.js';
@@ -597,5 +599,153 @@ describe('Sinking Fund allocations and protected cash', () => {
     expect(() => calculateSinkingFundSchedule(input([completed], [retained]))).toThrowError(
       FinancialEngineInvariantError,
     );
+  });
+
+  describe('Stage 4 reservation validation coverage', () => {
+    it('rejects funded consumption without a matching same-instant consumption flow', () => {
+      const target = fund(90, 10_000n);
+      const reserved = allocation(91, target, 10_000n, parseInstant('2026-01-10T00:00:00Z'));
+      const [spent, consumptionFlow] = fundedConsumption(
+        92,
+        target,
+        1_000n,
+        parseInstant('2026-01-20T00:00:00Z'),
+      );
+      const mismatchedFlow = createEconomicFlow({
+        ...consumptionFlow,
+        effectiveAt: parseInstant('2026-01-20T00:00:01Z'),
+      });
+
+      expect(() =>
+        calculateSinkingFundSchedule(
+          input([target], [reserved, spent], { economicFlows: [mismatchedFlow] }),
+        ),
+      ).toThrowError(FinancialEngineInvariantError);
+    });
+
+    it('rejects non-EUR funds and inconsistent Pay Cycle sequences', () => {
+      const usdTarget = fund(93, 10_000n, undefined, undefined, {
+        target: createMoney(10_000n, parseCurrencyCode('USD')),
+      });
+      expect(() => calculateSinkingFundSchedule(input([usdTarget]))).toThrowError(
+        FinancialEngineInvariantError,
+      );
+
+      const laterCycle = createPayCycle({
+        id: parsePayCycleId(uuid(94)),
+        openingSalaryTransactionId: parseTransactionId(uuid(94)),
+        startInclusive: parseInstant('2026-02-27T08:00:00Z'),
+        startDate: parseLocalDate('2026-02-27'),
+        closingSalaryTransactionId: null,
+        endExclusive: null,
+        expectedNextPayDate: parseLocalDate('2026-03-27'),
+        status: 'open',
+      });
+      expect(() =>
+        calculateSinkingFundSchedule(
+          input([fund(95, 10_000n)], [], { payCycles: [CYCLE, laterCycle] }),
+        ),
+      ).toThrowError(FinancialEngineInvariantError);
+    });
+
+    it('caps reopened due at current remaining when prior overfunding absorbs a release', () => {
+      const target = fund(96, 10_000n);
+      const overfunded = allocation(97, target, 20_000n, parseInstant('2026-01-10T00:00:00Z'));
+      const release = allocation(
+        98,
+        target,
+        5_000n,
+        parseInstant('2026-01-28T00:00:00Z'),
+        'release',
+      );
+      const item = scheduleValue(
+        calculateSinkingFundSchedule(input([target], [overfunded, release])),
+      ).funds[0]!;
+
+      expect(item.excess.amountMinor).toBe(5_000n);
+      expect(item.remaining.amountMinor).toBe(0n);
+      expect(item.currentCycleRequirement?.outstandingAmount.amountMinor).toBe(0n);
+    });
+
+    it('uses stable ID ordering when due date and priority are equal', () => {
+      const first = fund(99, 10_000n, '2026-03-27', undefined, { priority: 1 });
+      const second = fund(100, 10_000n, '2026-03-27', undefined, { priority: 1 });
+      const value = scheduleValue(calculateSinkingFundSchedule(input([second, first])));
+
+      expect(value.funds.map((item) => item.fundId)).toEqual([first.id, second.id]);
+    });
+
+    it('represents inactive and overfunded funds without requiring a Pay Cycle', () => {
+      const inactive = fund(101, 10_000n, '2026-03-27', undefined, {
+        status: 'cancelled',
+        committed: false,
+      });
+      const overfunded = fund(102, 10_000n);
+      const event = allocation(103, overfunded, 11_000n, parseInstant('2026-01-10T00:00:00Z'));
+      const result = scheduleValue(
+        calculateSinkingFundSchedule(input([overfunded, inactive], [event], { payCycles: [] })),
+      );
+
+      expect(result.funds.find((item) => item.fundId === inactive.id)?.state).toBe('inactive');
+      expect(result.funds.find((item) => item.fundId === overfunded.id)?.state).toBe('overfunded');
+    });
+
+    it('propagates unavailable history through every reservation projection', () => {
+      const target = fund(104, 10_000n);
+      const incomplete = createMeasurementPeriod({
+        startInclusive: parseInstant('2026-01-15T00:00:00Z'),
+        endExclusive: COVERAGE.endExclusive,
+      });
+      const common = {
+        funds: [target],
+        allocations: [],
+        economicFlows: [],
+        reservationCoverage: incomplete,
+        asOf: AS_OF,
+        engineVersion: '2c.0.0',
+        settingsVersion: 'settings-1',
+        inputWatermark: 'watermark-1',
+      } as const;
+
+      expect(
+        calculateCurrentCycleSinkingDue(input([target], [], { reservationCoverage: incomplete })),
+      ).toMatchObject({ status: 'unavailable', value: null });
+      expect(
+        calculateReservedCash({ ...common, liquidCash: createMoney(10_000n, EUR) }),
+      ).toMatchObject({ status: 'unavailable', value: null });
+      expect(calculateFundedConsumptionCoverage(common)).toMatchObject({
+        status: 'unavailable',
+        value: null,
+      });
+    });
+
+    it('rejects non-EUR liquid cash and reservation periods after as-of', () => {
+      const target = fund(105, 10_000n);
+      const common = {
+        funds: [target],
+        allocations: [],
+        economicFlows: [],
+        reservationCoverage: COVERAGE,
+        asOf: AS_OF,
+        engineVersion: '2c.0.0',
+        settingsVersion: 'settings-1',
+        inputWatermark: 'watermark-1',
+      } as const;
+      expect(() =>
+        calculateReservedCash({
+          ...common,
+          liquidCash: createMoney(10_000n, parseCurrencyCode('USD')),
+        }),
+      ).toThrowError(FinancialEngineInvariantError);
+      expect(() =>
+        calculateReservationEffect({
+          ...common,
+          period: createMeasurementPeriod({
+            startInclusive: AS_OF,
+            endExclusive: parseInstant('2026-02-01T00:00:00Z'),
+          }),
+        }),
+      ).toThrowError(FinancialEngineInvariantError);
+    });
   });
 });
