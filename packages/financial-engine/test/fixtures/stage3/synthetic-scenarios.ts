@@ -175,11 +175,23 @@ function expectedPayDates(date: LocalDate): readonly LocalDate[] {
     .map((item) => parseLocalDate(item));
 }
 
+function monthsIntersectingInterval(date: LocalDate, nextIncome: LocalDate): readonly YearMonth[] {
+  const endMonth = monthOf(nextIncome);
+  const months: YearMonth[] = [];
+  for (let month = monthOf(date); month <= endMonth; month = addYearMonths(month, 1)) {
+    months.push(month);
+  }
+  return Object.freeze(months);
+}
+
 function operationalNeeds(date: LocalDate, nextIncome: LocalDate | null) {
   if (nextIncome === null) return [];
-  const month = monthOf(date);
-  return scheduledRecurring(month)
+  return monthsIntersectingInterval(date, nextIncome)
+    .flatMap((month) => scheduledRecurring(month))
     .filter((item) => item.dueDate > date && item.dueDate < nextIncome)
+    .sort(
+      (left, right) => left.dueDate.localeCompare(right.dueDate) || left.id.localeCompare(right.id),
+    )
     .map((item, index) =>
       createOperationalNeed({
         id: parseOperationalNeedId(syntheticUuid(21, Number(date.replaceAll('-', '')) + index)),
@@ -620,7 +632,15 @@ export function buildSyntheticScenario(id: SyntheticScenarioId): FinancialEngine
       historicalIncomplete,
     ),
     ccrPeriod: Object.freeze({ startInclusive: ccrStart(asOf), endExclusive: asOf }),
-    rollingCcrPeriods: Object.freeze([]),
+    rollingCcrPeriods:
+      id === 'healthy_current'
+        ? Object.freeze([
+            Object.freeze({
+              startInclusive: parseInstant('2026-06-14T08:00:00Z'),
+              endExclusive: parseInstant('2026-09-14T08:00:00Z'),
+            }),
+          ])
+        : Object.freeze([]),
     forwardProjection: forwardProjection(effectiveDate),
     recurringPlanId: SYNTHETIC_IDS.recurringPlan,
     currentRecurringContribution: money(5_000n),

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { EconomicFlow, SinkingFundAllocation, YearMonth } from '@personal-cfo/domain';
-import { parseInstant } from '@personal-cfo/domain';
+import { parseInstant, parseLocalDate } from '@personal-cfo/domain';
 
 import { calculateLedgerBalance, evaluateFinancialState } from '../src/index.js';
 import { SYNTHETIC_EXPECTATIONS } from './fixtures/stage3/synthetic-expectations.js';
@@ -96,20 +96,81 @@ describe('Stage 3 synthetic financial dataset', () => {
     );
   });
 
-  it('constructs salary-driven cycles despite weekend drift and side income', () => {
+  it('covers scheduled operational needs across calendar-month boundaries', () => {
+    const cases = [
+      {
+        checkpointDate: '2026-08-30',
+        nextSalaryDate: '2026-09-28',
+        effectiveDate: '2026-09-14',
+        asOf: '2026-09-14T08:00:00Z',
+        expected: [
+          ['2026-09-03', 90_000n],
+          ['2026-09-06', 9_000n],
+          ['2026-09-09', 4_500n],
+          ['2026-09-12', 5_000n],
+          ['2026-09-15', 1_500n],
+        ],
+      },
+      {
+        checkpointDate: '2026-09-29',
+        nextSalaryDate: '2026-10-28',
+        effectiveDate: '2026-10-14',
+        asOf: '2026-10-14T08:00:00Z',
+        expected: [
+          ['2026-10-03', 90_000n],
+          ['2026-10-06', 13_000n],
+          ['2026-10-09', 4_500n],
+          ['2026-10-12', 5_000n],
+          ['2026-10-15', 1_500n],
+        ],
+      },
+    ] as const;
+
+    for (const testCase of cases) {
+      const checkpoint = buildSyntheticHistoricalCheckpoints(
+        parseLocalDate(testCase.effectiveDate),
+        parseInstant(testCase.asOf),
+      ).find((item) => item.kind === 'cash_drag_day' && item.date === testCase.checkpointDate);
+      if (checkpoint === undefined) throw new Error('Expected synthetic checkpoint was not built.');
+      expect(
+        checkpoint.operationalNeeds.map((item) => [item.dueDate, item.amount.amountMinor]),
+      ).toEqual(testCase.expected);
+      expect(checkpoint.nextReliableIncomeDate).toBe(testCase.nextSalaryDate);
+      expect(
+        checkpoint.operationalNeeds.every(
+          (item) =>
+            item.dueDate > testCase.checkpointDate && item.dueDate < testCase.nextSalaryDate,
+        ),
+      ).toBe(true);
+      expect(checkpoint.operationalNeeds.map((item) => `${item.dueDate}:${item.id}`)).toEqual(
+        [...checkpoint.operationalNeeds]
+          .sort(
+            (left, right) =>
+              left.dueDate.localeCompare(right.dueDate) || left.id.localeCompare(right.id),
+          )
+          .map((item) => `${item.dueDate}:${item.id}`),
+      );
+      expect(checkpoint.quality.liquidityInputs.operationalNeeds).toBe('complete');
+    }
+  });
+
+  it('constructs the literal salary-driven cycle catalog despite weekend drift and side income', () => {
     const input = buildSyntheticScenario('healthy_current');
     const result = evaluateFinancialState(input);
     const recent = result.payCycles.slice(-5);
 
     expect(result.payCycles).toHaveLength(25);
-    expect(recent.map((item) => item.startDate)).toEqual([
-      '2026-04-28',
-      '2026-05-28',
-      '2026-06-29',
-      '2026-07-28',
-      '2026-08-28',
-    ]);
-    expect(recent.at(-1)).toMatchObject({ status: 'open', expectedNextPayDate: '2026-09-28' });
+    expect(
+      recent.map((item) => ({
+        id: item.id,
+        openingSalaryTransactionId: item.openingSalaryTransactionId,
+        startDate: item.startDate,
+        closingSalaryTransactionId: item.closingSalaryTransactionId,
+        endExclusive: item.endExclusive,
+        status: item.status,
+        expectedNextPayDate: item.expectedNextPayDate,
+      })),
+    ).toEqual(SYNTHETIC_EXPECTATIONS.payCycles);
     expect(result.payCycles.some((item) => item.startDate === '2026-09-05')).toBe(false);
     expect(input.canonical.primarySalaryTriggers).toHaveLength(25);
   });
@@ -183,6 +244,35 @@ describe('Stage 3 synthetic financial dataset', () => {
     expect(ccr.capitalCreated.amountMinor).toBe(expected.capitalCreated);
     expect(ccr.ratio.numerator * expected.reducedDenominator).toBe(
       ccr.ratio.denominator * expected.reducedNumerator,
+    );
+  });
+
+  it('matches the literal rolling multi-month CCR reference exactly', () => {
+    const expected = SYNTHETIC_EXPECTATIONS.healthy.rollingCcr;
+    const rolling = evaluateFinancialState(buildSyntheticScenario('healthy_current')).rollingCcr;
+
+    expect(rolling).toHaveLength(1);
+    expect(rolling[0]?.period).toEqual({
+      startInclusive: expected.startInclusive,
+      endExclusive: expected.endExclusive,
+    });
+    expect(rolling[0]?.result.status).toBe(expected.status);
+    const value = rolling[0]?.result.value;
+    if (value === null || value === undefined || value.ratio === null) {
+      throw new Error('Synthetic rolling CCR must be available.');
+    }
+    expect(value.recognizedIncome.amountMinor).toBe(expected.recognizedIncome);
+    expect(value.grossConsumption.amountMinor).toBe(expected.grossConsumption);
+    expect(value.refunds.amountMinor).toBe(expected.refunds);
+    expect(value.netConsumption.amountMinor).toBe(expected.netConsumption);
+    expect(value.shortTermReservedFundsChange.amountMinor).toBe(expected.reservationChange);
+    expect(value.capitalCreated.amountMinor).toBe(expected.capitalCreated);
+    expect(value.ratio).toEqual({
+      numerator: expected.ratioNumerator,
+      denominator: expected.ratioDenominator,
+    });
+    expect(value.ratio.numerator * expected.reducedDenominator).toBe(
+      value.ratio.denominator * expected.reducedNumerator,
     );
   });
 
