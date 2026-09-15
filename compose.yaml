@@ -15,9 +15,15 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile
     environment:
+      APP_ORIGIN: http://127.0.0.1:8080
+      DATABASE_URL: postgresql://${POSTGRES_USER:-personal_cfo}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-personal_cfo_dev}
       HOSTNAME: 0.0.0.0
-      NODE_ENV: production
+      NODE_ENV: development
       PORT: '3000'
+      SESSION_COOKIE_SECURE: 'false'
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
       test:
         [
@@ -37,8 +43,26 @@ services:
       context: .
       dockerfile: apps/worker/Dockerfile
     environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-personal_cfo}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-personal_cfo_dev}
+      MIGRATIONS_DIR: /app/migrations
       NODE_ENV: production
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    command: ['node', 'dist/cli/migrate.js']
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-personal_cfo}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-personal_cfo_dev}
+      MIGRATIONS_DIR: /app/migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles: ['tools']
 
   postgres:
     image: postgres:17.6-alpine
@@ -54,6 +78,23 @@ services:
     restart: unless-stopped
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
+  postgres-test:
+    image: postgres:17.6-alpine
+    environment:
+      POSTGRES_DB: personal_cfo_test
+      POSTGRES_PASSWORD: test-only
+      POSTGRES_USER: personal_cfo_test
+    ports:
+      - '127.0.0.1:55432:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U personal_cfo_test -d personal_cfo_test']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    profiles: ['test']
+    tmpfs:
+      - /var/lib/postgresql/data
 
 volumes:
   postgres_data:

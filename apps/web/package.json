@@ -13,6 +13,8 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "@personal-cfo/data": "workspace:*",
+    "@personal-cfo/domain": "workspace:*",
     "next": "16.3.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"

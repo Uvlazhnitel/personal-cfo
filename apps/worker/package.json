@@ -7,9 +7,25 @@
     ".": "./src/index.ts"
   },
   "scripts": {
-    "build": "tsc -p tsconfig.build.json",
+    "build": "node build.mjs",
+    "cli:create-user": "pnpm run build && node dist/cli/create-user.js",
+    "cli:migrate": "pnpm run build && node dist/cli/migrate.js",
+    "cli:synthetic-import": "pnpm run build && node dist/dev/import-synthetic.js",
     "dev": "pnpm run build && pnpm run start",
     "start": "node dist/index.js",
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@personal-cfo/data": "workspace:*",
+    "@personal-cfo/domain": "workspace:*",
+    "@personal-cfo/financial-engine": "workspace:*",
+    "argon2": "0.45.1",
+    "decimal.js": "10.6.0",
+    "drizzle-orm": "0.45.2",
+    "pg": "8.23.0",
+    "pg-boss": "12.32.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

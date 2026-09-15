@@ -13,6 +13,9 @@ const infrastructureImports = [
   'drizzle-orm/*',
   'pg',
   'pg/*',
+  'pg-boss',
+  'pg-boss/*',
+  'argon2',
   'openai',
   'openai/*',
   '@ai-sdk/*',
@@ -84,7 +87,7 @@ export default tseslint.config(
   },
   {
     ...tseslint.configs.disableTypeChecked,
-    files: ['scripts/**/*.mjs', '*.config.mjs'],
+    files: ['**/*.mjs'],
     languageOptions: {
       ...tseslint.configs.disableTypeChecked.languageOptions,
       globals: {

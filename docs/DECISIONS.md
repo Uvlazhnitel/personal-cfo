@@ -292,6 +292,46 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Canonical evidence overrides optimistic checkpoint completeness. Original reconciliation adjustments are validated even after resolution, prior cutoffs retain the blocker, and resolved adjustment records remain immutable audit history while leaving active metric projections. Ambiguities remain active because Stage 2 has no ambiguity-resolution lifecycle; reclassification records provenance without adding classification history.
 
+## ADR-025 — Relational Identity with Append-Only Revisions
+
+**Status:** Accepted — 2026-09-15
+
+**Decision:** Store stable transaction and flow identities separately from append-only transaction, entry, and classification revisions. Current projections select one active revision. Composite owner-scoped foreign keys protect every cross-entity reference.
+
+**Reasoning:** Corrections must preserve the previously asserted fact and cannot rely on globally unique IDs alone to enforce ownership.
+
+**Consequences:** Repository writes append revisions and switch the current marker transactionally. Canonical financial facts remain relational; JSONB is limited to validated source projections, bounded planning metadata, and derived snapshots.
+
+## ADR-026 — Command and Job Atomicity
+
+**Status:** Accepted — 2026-09-15
+
+**Decision:** A financial command, audit record, monotonic owner input-version increment, recalculation record, and pg-boss send commit in one PostgreSQL transaction. Idempotency is unique by owner, command kind, and key; normalized SHA-256 request hashes distinguish replay from conflict.
+
+**Reasoning:** An application/database dual write can permanently lose recalculation or apply a mutation twice after an uncertain response.
+
+**Consequences:** Jobs contain IDs and provenance only. Transient failures retry three times with five-second exponential backoff; permanent canonical failures go directly to explicit dead-letter queues.
+
+## ADR-027 — Versioned Snapshot Supersession
+
+**Status:** Accepted — 2026-09-15
+
+**Decision:** Each successful run atomically inserts a normalized full result and queryable metric projections. It marks prior authoritative projections non-authoritative and links them to replacements with `superseded_by`. One owner advisory lock and run-envelope identity prevent competing authoritative runs.
+
+**Reasoning:** Overwriting derived values destroys auditability while retaining multiple unlabelled current rows makes reads ambiguous.
+
+**Consequences:** Snapshots are caches and never become source facts. The first sanitized synthetic import keeps its Stage 4 fixture watermark at durable input version 1 for byte-equivalent golden verification; later mutations use `owner:<uuid>:v<version>`.
+
+## ADR-028 — Development-Only Insecure Cookie Exception
+
+**Status:** Accepted — 2026-09-15
+
+**Decision:** Session cookies are secure by default. `SESSION_COOKIE_SECURE=false` is accepted only when `NODE_ENV=development` and `APP_ORIGIN` is loopback HTTP; other insecure combinations fail startup.
+
+**Reasoning:** Local Compose deliberately serves HTTP on loopback, where a Secure cookie cannot complete authentication. Broad insecure configuration would weaken production silently.
+
+**Consequences:** Production must terminate HTTPS and retain Secure, HttpOnly, SameSite=Lax cookies. Application login throttling ships now; Caddy edge throttling remains deployment configuration because the stock image has no rate-limit module.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

@@ -96,6 +96,8 @@ Required reconciliation regressions are:
 
 ## Stage 5 — Persistence and Internal Debug Overview
 
+**Status:** Implemented on 2026-09-15; production deployment hardening remains subject to the open backup and edge-control decisions.
+
 **Goal:** Persist canonical facts and make calculations inspectable end to end.
 
 **Dependencies:** Stages 1B and 2–4; provisional policy calibration reviewed.

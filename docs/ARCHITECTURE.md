@@ -104,7 +104,7 @@ The worker uses pg-boss in the application PostgreSQL database. Jobs include:
 - recommendation evaluation and restrained notification delivery;
 - Telegram long polling and message processing.
 
-Jobs carry entity IDs, not secrets or full financial payloads. They are idempotent, have bounded exponential retries, and move to a dead-letter state after permanent exhaustion. Scheduled jobs use Europe/Riga calendar boundaries; stored execution times are UTC. A unique job key prevents duplicate schedules.
+Jobs carry entity IDs, input versions, cause/cutoff, and correlation metadata—not secrets or full financial payloads. Financial recalculation and Sinking allocation use PostgreSQL-backed pg-boss queues. Transient failures receive three attempts with five-second exponential backoff; permanent canonical-input failures are recorded and routed directly to bounded dead-letter metadata. Scheduled jobs use Europe/Riga calendar boundaries; stored execution times are UTC. A unique owner/version or owner/salary key prevents duplicate schedules.
 
 ### PWA
 
@@ -134,9 +134,11 @@ Every derived result is `complete`, `partial`, or `unavailable`, with stale sour
 
 ## Authentication and Security Boundaries
 
-V1 has one bootstrapped local account. Passwords use Argon2id; session identifiers are random, stored hashed, rotated after login, and delivered only in `Secure`, `HttpOnly`, `SameSite=Lax` cookies. State-changing browser requests require CSRF validation. Login and public callbacks are rate-limited at Caddy and application levels.
+V1 has one bootstrapped local account. Passwords use Argon2id (64 MiB, three iterations, parallelism one, 32-byte output). Session and CSRF values contain 32 random bytes and only SHA-256 hashes are stored. Login revokes prior sessions; sessions expire after seven days and `lastUsedAt` writes are throttled. The session cookie is `HttpOnly`, `SameSite=Lax`, `Path=/`, and secure by default. Commands require a session-bound CSRF token, exact Origin, validated input, and `Idempotency-Key`. Application login throttling is implemented; stock-Caddy edge throttling remains production deployment work.
 
-The first user is created through an explicit one-off, interactive administration command inside the web container. There is no default credential, public registration, password value in Compose, or password-reset email flow in V1.
+The only insecure-cookie exception is `SESSION_COOKIE_SECURE=false` with `NODE_ENV=development` and a loopback HTTP `APP_ORIGIN`; every other insecure configuration fails startup. There is no public signup.
+
+The first user is created through an explicit one-off administration command with hidden, repeated TTY password entry. There is no default credential, public registration, password value in Compose, or password-reset email flow in V1.
 
 Integration tokens are encrypted with authenticated encryption using a versioned key supplied outside the database. Banking passwords are never requested or stored. Logs redact tokens, account identifiers, raw descriptions, message text, and monetary payloads. Database and backup access is limited to the application operator. Data sent to an AI provider is minimized and separately auditable.
 

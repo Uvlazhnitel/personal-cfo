@@ -1,4 +1,5 @@
 export * from './errors.js';
+export * from './automatic-sinking-allocation.js';
 export * from './forecast.js';
 export * from './forward-projection.js';
 export * from './capital-conversion.js';

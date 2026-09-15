@@ -234,6 +234,8 @@ The outstanding amount becomes due at salary booking, or immediately for a commi
 
 Allocation is manual by default. A fund may explicitly enable `on_primary_income`. At salary receipt or a mid-cycle fund change, the application may convert the deterministic outstanding amount into an audited virtual allocation; no physical bank transfer occurs.
 
+`calculateAutomaticSinkingAllocations` is a pure application-planning helper. It requires complete current liquidity and Sinking protection, selects only active committed `on_primary_income` funds, orders them by due date, priority, then stable ID, and caps the plan at free liquid cash above non-Sinking minimum liquidity. Partial capacity leaves the remainder outstanding; the helper never writes or moves money.
+
 Automatic allocation orders funds by earliest due date, explicit priority, then stable fund ID. It is capped at unallocated liquid cash above non-Sinking minimum cash:
 
 ```text

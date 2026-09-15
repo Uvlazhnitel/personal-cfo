@@ -1,0 +1,41 @@
+{
+  "version": "7",
+  "dialect": "postgresql",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "7",
+      "when": 1789484909358,
+      "tag": "0000_identity_auth_commands",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1789484954807,
+      "tag": "0001_canonical_finance",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1789484955464,
+      "tag": "0002_planning_reconciliation",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1789484956178,
+      "tag": "0003_engine_snapshots",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1789484956819,
+      "tag": "0004_pgboss_queues",
+      "breakpoints": true
+    }
+  ]
+}

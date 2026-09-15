@@ -31,11 +31,15 @@ Dependencies point inward: delivery and adapters may depend on domain interfaces
 
 ## Development and Testing
 
-Use Node.js 24 and pnpm 11.19.0. Install with `pnpm install --frozen-lockfile`. Run `pnpm lint` for source and package-boundary checks, `pnpm typecheck` for strict TypeScript, `pnpm test` for Vitest, and `pnpm format:check` before submitting. Use `pnpm format` to apply formatting and `pnpm test:coverage` when measuring coverage. Build runtime shells with `pnpm build`; use `pnpm dev:web` or `pnpm dev:worker` locally. `docker compose up --build` exposes only Caddy at `127.0.0.1:8080`; PostgreSQL remains internal.
+Use Node.js 24 and pnpm 11.19.0. Install with `pnpm install --frozen-lockfile`. Run `pnpm lint`, `pnpm typecheck`, `pnpm test`, `pnpm test:coverage`, and `pnpm format:check` before submitting; `pnpm build` compiles both runtimes. Database work uses `pnpm db:check`, `pnpm db:generate`, and explicit `pnpm db:migrate`. Run PostgreSQL integration tests with `DATABASE_URL=.../personal_cfo_test pnpm test:integration`. `pnpm synthetic:import` is development-only; `pnpm admin:create-user -- <login>` requires a TTY.
+
+`docker compose up --build` exposes only Caddy at `127.0.0.1:8080`; application PostgreSQL remains internal. Use the `test` profile for the disposable loopback database and the `tools` profile for explicit migration. Never auto-run migrations from web or worker startup.
 
 Use strict TypeScript. Store money as integer minor units using `bigint`; serialize it as strings and never use JavaScript floating point in financial paths. Keep critical functions pure and pass time, settings, and inputs explicitly.
 
 Unit-test every formula and edge case. Use integration fixtures rather than live credentials, and reference FRD IDs in tests when traceability helps. Internal transfers, cash reconciliation, duplicate imports, classification changes, and historical recalculation require explicit regression coverage.
+
+Persistence mutations must be owner-scoped, transactional, append-only where facts are corrected, and paired atomically with audit, input-version increment, and pg-boss enqueue. Do not store authoritative source facts only in JSONB; JSONB is for bounded planning metadata and normalized derived snapshots.
 
 ## Commits and Pull Requests
 
