@@ -22,6 +22,10 @@ The worker assembles one repeatable-read input snapshot for the job's explicit i
 
 Successful runs atomically persist the normalized full result, metric snapshots, Pay Cycles, and fund requirements. Prior derived rows remain queryable but become non-authoritative and link to their replacement. Initial synthetic version 1 alone may retain its checked-in watermark; later runs use `owner:<owner>:v<version>`.
 
+The integration contract verifies queue durability at the application boundary with two completely separate pg-boss consumer instances: a recalculation enqueued and committed through the first instance remains in PostgreSQL after that instance closes, and the second instance processes it through the production recalculation handler. The same contract injects one transient handler failure and observes pg-boss retry the persisted job before exactly one engine run and one authoritative derived-state set are published.
+
+Cash-reconciliation verification follows the complete command-to-publication lifecycle. A signed adjustment changes Net Worth, current liquid cash, and unrounded Safe to Invest by the exact variance while remaining excluded from recognized income, ordinary consumption, and CCR capital creation. Resolution advances the input version and restores later authority without erasing the active-reconciliation meaning at cutoffs before `resolvedAt` or reversing the recorded wealth adjustment.
+
 ## Authentication and Commands
 
 Create the local user with `pnpm admin:create-user -- <login>`; the password is read twice without echo. Login names are canonical lowercase. Login rotates active sessions. Browser commands under `/api/v1/commands/<kind>` require the session cookie, exact Origin, matching session-bound CSRF token, and an `Idempotency-Key` header.

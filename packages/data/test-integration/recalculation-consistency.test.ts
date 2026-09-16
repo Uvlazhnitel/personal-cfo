@@ -14,7 +14,10 @@ import {
 } from '@personal-cfo/domain';
 
 import { assembleFinancialEngineInput } from '../../../apps/worker/src/engine-input.js';
-import { processAutomaticSinkingAllocationJob } from '../../../apps/worker/src/job-handlers.js';
+import {
+  processAutomaticSinkingAllocationJob,
+  processRecalculationJob,
+} from '../../../apps/worker/src/job-handlers.js';
 import { recalculateFinancialState } from '../../../apps/worker/src/recalculation.js';
 import { buildSyntheticScenario } from '../../financial-engine/test/fixtures/stage3/synthetic-scenarios.js';
 import { evaluateFinancialState } from '../../financial-engine/src/index.js';
@@ -493,12 +496,13 @@ suite('recalculation publication consistency', () => {
     }
   });
 
-  it('derives reconciliation and resolution cutoffs from their canonical instants', async () => {
-    const { ownerId, scenario } = await seedSynthetic();
+  it('publishes exact reconciliation effects and preserves resolution cutoff history', async () => {
+    const { ownerId, scenario, result: before } = await seedSynthetic();
     const cash = scenario.canonical.accounts.find((account) => account.subtype === 'cash');
     if (cash === undefined) throw new Error('Missing cash account.');
     const transactionId = generateUuidV7('integration-reconciliation-transaction') as never;
-    const reconciledAt = '2026-09-14T09:30:00Z' as const;
+    const reconciledAt = '2026-09-14T07:30:00Z' as const;
+    const commandAt = '2026-09-14T09:30:00Z' as const;
     const transaction = createCanonicalTransaction({
       id: transactionId,
       effectiveAt: reconciledAt as never,
@@ -509,7 +513,7 @@ suite('recalculation publication consistency', () => {
           id: generateUuidV7('integration-reconciliation-entry') as never,
           transactionId,
           accountId: cash.id,
-          amount: createMoney(-500n, EUR),
+          amount: createMoney(-1_500n, EUR),
           role: 'valuation_adjustment',
         },
       ],
@@ -518,15 +522,15 @@ suite('recalculation publication consistency', () => {
       id: generateUuidV7('integration-reconciliation-flow') as never,
       transactionId,
       effectiveAt: reconciledAt as never,
-      amount: createMoney(-500n, EUR),
+      amount: createMoney(-1_500n, EUR),
       kind: 'cash_reconciliation_adjustment',
     });
     const reconciliation = createCashReconciliation({
       id: generateUuidV7('integration-reconciliation') as never,
       accountId: cash.id,
       calculatedBalance: createMoney(12_500n, EUR),
-      countedBalance: createMoney(12_000n, EUR),
-      variance: createMoney(-500n, EUR),
+      countedBalance: createMoney(11_000n, EUR),
+      variance: createMoney(-1_500n, EUR),
       reconciledAt: reconciledAt as never,
       actor: 'integration-user',
       reason: 'integration count',
@@ -536,6 +540,25 @@ suite('recalculation publication consistency', () => {
     const boss = createJobBoss(databaseUrl!, 2);
     await boss.start();
     try {
+      await boss.work<RecalculationJob>('financial.recalculate', { batchSize: 1 }, async (jobs) => {
+        for (const job of jobs) await processRecalculationJob(context.db, boss, job);
+      });
+      const waitForVersion = async (version: bigint): Promise<void> => {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          const record = await context.db.query.recalculationRecords.findFirst({
+            where: and(
+              eq(recalculationRecords.ownerId, ownerId),
+              eq(recalculationRecords.inputVersion, version),
+            ),
+          });
+          if (record?.status === 'completed') return;
+          if (record?.status === 'failed' || record?.status === 'superseded')
+            throw new Error(`Reconciliation recalculation ended as ${record.status}.`);
+          await new Promise((resolvePoll) => setTimeout(resolvePoll, 50));
+        }
+        throw new Error(`Timed out waiting for reconciliation version ${version}.`);
+      };
       await executeFinancialCommand(
         context.db,
         boss,
@@ -544,9 +567,9 @@ suite('recalculation publication consistency', () => {
           kind: 'cash_reconciliation',
           idempotencyKey: 'cash-reconciliation-life',
           request: { reconciliationId: reconciliation.id },
-          asOf: reconciledAt,
+          asOf: commandAt,
           effectiveDate: '2026-09-14',
-          now: reconciledAt,
+          now: commandAt,
         },
         (tx) => appendCashReconciliation(tx, ownerId, transaction, flow, reconciliation),
       );
@@ -557,8 +580,50 @@ suite('recalculation publication consistency', () => {
         ),
       });
       expect(canonicalDatabaseInstant(createRecord!.earliestAffectedAt!)).toBe(reconciledAt);
-      expect((await recalculateVersion(ownerId, 2n, '2026-09-14T09:31:00Z')).status).toBe(
-        'published',
+      await waitForVersion(2n);
+
+      const afterAssembly = await assembleFinancialEngineInput(context.db, {
+        ownerId,
+        expectedInputVersion: 2n,
+        asOf: commandAt,
+        effectiveDate: '2026-09-14',
+        cause: 'cash_reconciliation',
+      });
+      if (afterAssembly.status !== 'ready') throw new Error('Reconciliation assembly superseded.');
+      const after = evaluateFinancialState(afterAssembly.input);
+      expect(after.netWorth.value!.total.amountMinor).toBe(
+        before.netWorth.value!.total.amountMinor - 1_500n,
+      );
+      expect(after.positions.liquidCash.value!.amountMinor).toBe(
+        before.positions.liquidCash.value!.amountMinor - 1_500n,
+      );
+      expect(after.liquidityReserve.value!.currentLiquidCash.amountMinor).toBe(
+        before.liquidityReserve.value!.currentLiquidCash.amountMinor - 1_500n,
+      );
+      expect(after.safeToInvest.value!.unroundedRecommended.amountMinor).toBe(
+        before.safeToInvest.value!.unroundedRecommended.amountMinor - 1_500n,
+      );
+      expect(before.safeToInvest.value!.recommended.amountMinor).toBe(2_559_000n);
+      expect(after.safeToInvest.value!.recommended.amountMinor).toBe(2_558_000n);
+      expect(after.safeToInvest.status).toBe('partial');
+      expect(after.investabilityReadiness).toMatchObject({ kind: 'provisional' });
+      expect(after.ccr.value).not.toBeNull();
+      expect(before.ccr.value).not.toBeNull();
+      for (const component of [
+        'recognizedIncome',
+        'grossConsumption',
+        'refunds',
+        'reimbursements',
+        'netConsumption',
+        'shortTermReservedFundsChange',
+        'capitalCreated',
+      ] as const) {
+        expect(after.ccr.value![component].amountMinor).toBe(
+          before.ccr.value![component].amountMinor,
+        );
+      }
+      expect(after.ccr.value!.cashReconciliationAdjustments.amountMinor).toBe(
+        before.ccr.value!.cashReconciliationAdjustments.amountMinor - 1_500n,
       );
 
       const resolvedAt = '2026-09-14T09:40:00Z' as const;
@@ -589,9 +654,42 @@ suite('recalculation publication consistency', () => {
         ),
       });
       expect(canonicalDatabaseInstant(resolutionRecord!.earliestAffectedAt!)).toBe(resolvedAt);
-      expect((await recalculateVersion(ownerId, 3n, '2026-09-14T09:41:00Z')).status).toBe(
-        'published',
+      await waitForVersion(3n);
+
+      const at = async (asOf: string) => {
+        const assembled = await assembleFinancialEngineInput(context.db, {
+          ownerId,
+          expectedInputVersion: 3n,
+          asOf,
+          effectiveDate: '2026-09-14',
+          cause: 'cash_reconciliation_resolution',
+        });
+        if (assembled.status !== 'ready') throw new Error('Resolution assembly superseded.');
+        return evaluateFinancialState(assembled.input);
+      };
+      const beforeResolutionCutoff = await at('2026-09-14T09:35:00Z');
+      const afterResolutionCutoff = await at('2026-09-14T09:41:00Z');
+      expect(beforeResolutionCutoff.investabilityReadiness).toMatchObject({
+        kind: 'provisional',
+      });
+      expect(afterResolutionCutoff.investabilityReadiness).toEqual({ kind: 'complete' });
+      expect(afterResolutionCutoff.netWorth.value!.total.amountMinor).toBe(
+        after.netWorth.value!.total.amountMinor,
       );
+      expect(afterResolutionCutoff.positions.liquidCash.value!.amountMinor).toBe(
+        after.positions.liquidCash.value!.amountMinor,
+      );
+      expect(afterResolutionCutoff.safeToInvest.status).toBe('complete');
+      expect(
+        (
+          await context.db.query.recalculationRecords.findFirst({
+            where: and(
+              eq(recalculationRecords.ownerId, ownerId),
+              eq(recalculationRecords.inputVersion, 3n),
+            ),
+          })
+        )?.status,
+      ).toBe('completed');
     } finally {
       await boss.stop({ graceful: true, timeout: 5_000, close: true });
     }

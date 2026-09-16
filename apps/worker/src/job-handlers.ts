@@ -1,17 +1,80 @@
 import {
   appendManualSinkingAllocation,
+  DataInvariantError,
   executeFinancialCommand,
   generateUuidV7,
+  JOB_QUEUES,
+  updateRecalculationStatus,
 } from '@personal-cfo/data';
-import type { Database, SinkingAllocationJob } from '@personal-cfo/data';
+import type { Database, RecalculationJob, SinkingAllocationJob } from '@personal-cfo/data';
 import { createSinkingFundAllocation, parseInstant } from '@personal-cfo/domain';
-import type { PgBoss } from 'pg-boss';
+import type { Job, PgBoss } from 'pg-boss';
 import {
   calculateAutomaticSinkingAllocations,
   evaluateFinancialState,
 } from '@personal-cfo/financial-engine';
 
 import { assembleFinancialEngineInput } from './engine-input.js';
+import { recalculateFinancialState } from './recalculation.js';
+
+export type RecalculationJobOutcome =
+  | Readonly<{ status: 'published'; runId: string; reused: boolean }>
+  | Readonly<{
+      status: 'superseded';
+      requestedInputVersion: bigint;
+      currentInputVersion: bigint;
+    }>
+  | Readonly<{ status: 'dead_lettered'; category: 'permanent_input' }>;
+
+export type WorkerEventLogger = (event: string, fields?: Readonly<Record<string, unknown>>) => void;
+
+export async function processRecalculationJob(
+  db: Database,
+  boss: PgBoss,
+  job: Job<RecalculationJob>,
+  log: WorkerEventLogger = () => undefined,
+): Promise<RecalculationJobOutcome> {
+  log('financial.recalculation.started', { jobId: job.id, ownerId: job.data.ownerId });
+  try {
+    const result = await recalculateFinancialState(db, job.data);
+    if (result.status === 'superseded') {
+      log('financial.recalculation.superseded', {
+        jobId: job.id,
+        requestedInputVersion: result.requestedInputVersion.toString(),
+        currentInputVersion: result.currentInputVersion.toString(),
+      });
+    } else {
+      log('financial.recalculation.completed', {
+        jobId: job.id,
+        runId: result.runId,
+        reused: result.reused,
+      });
+    }
+    return result;
+  } catch (error) {
+    const permanent = error instanceof DataInvariantError;
+    const message = error instanceof Error ? error.message : 'Unknown recalculation failure.';
+    await updateRecalculationStatus(
+      db,
+      job.data.requestId,
+      permanent ? 'failed' : 'queued',
+      permanent ? new Date().toISOString() : null,
+      { category: permanent ? 'permanent_input' : 'transient_runtime', message },
+    );
+    if (!permanent) throw error;
+    await boss.send(JOB_QUEUES.recalculateDead, {
+      requestId: job.data.requestId,
+      ownerId: job.data.ownerId,
+      inputVersion: job.data.inputVersion,
+      category: 'permanent_input',
+    });
+    log('financial.recalculation.dead-lettered', {
+      jobId: job.id,
+      category: 'permanent_input',
+    });
+    return Object.freeze({ status: 'dead_lettered', category: 'permanent_input' });
+  }
+}
 
 export type AutomaticAllocationOutcome =
   | Readonly<{ status: 'superseded' | 'nothing_to_allocate' | 'replayed' }>
