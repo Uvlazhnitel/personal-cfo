@@ -29,4 +29,5 @@ export * from './portfolio-valuation.js';
 export * from './reportable-amount.js';
 export * from './sinking-fund.js';
 export * from './spending.js';
+export * from './spending-category.js';
 export * from './year-month.js';

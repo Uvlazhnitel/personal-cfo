@@ -344,6 +344,26 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Job `asOf` and Europe/Riga effective date own the run boundary. Initial synthetic version 1 may retain its fixture watermark; all later runs use the durable owner/version watermark. Recalculation records expose obsolete work explicitly while current authority remains monotonic.
 
+## ADR-030 — Durable Telegram Long-Poll Inbox and Offset
+
+**Status:** Accepted — 2026-09-16
+
+**Decision:** Persist every normalized `getUpdates` page and its monotonic next offset in one PostgreSQL transaction. Drain locally pending updates before polling. Telegram acknowledgement occurs only by the later poll with that persisted higher offset.
+
+**Reasoning:** Advancing an in-memory offset before the financial command commits can lose an update across a crash. Processing before any offset advance can needlessly retain provider backlog and does not provide stronger command atomicity.
+
+**Consequences:** Update and message identities are durably deduplicated. Five-minute leases recover crashed processors, while owner advisory locking and command idempotency provide exactly-once financial effects across concurrent workers. Telegram reply delivery remains at-most-controlled rather than claimed exactly once.
+
+## ADR-031 — Bounded Telegram Clarification and Text Retention
+
+**Status:** Accepted — 2026-09-16
+
+**Decision:** Retain normalized authorized text only while an update is pending, for at most 24 hours. Keep one structured clarification per owner/source/chat for 15 minutes and no more than two invalid replies. Clear text or structured payloads on every terminal state while retaining identifiers, hashes, outcomes, safe failures, and correction links.
+
+**Reasoning:** Crash recovery needs a durable input, but indefinite conversational storage is unnecessary for the bounded command surface and increases exposure of personal financial descriptions.
+
+**Consequences:** `/debug` and logs expose operational categories rather than message contents or Telegram identifiers. A complete independent command supersedes an active clarification. Corrections use the recorded successful bot-message identity for 30 days and preserve compensating financial history.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

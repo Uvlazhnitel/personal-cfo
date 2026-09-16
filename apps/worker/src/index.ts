@@ -6,7 +6,10 @@ import {
 } from '@personal-cfo/data';
 import type { RecalculationJob, SinkingAllocationJob } from '@personal-cfo/data';
 import { processAutomaticSinkingAllocationJob, processRecalculationJob } from './job-handlers.js';
+import { telegramConfiguration } from './telegram/config.js';
+import { startTelegramRuntime } from './telegram/runtime.js';
 
+const telegramConfig = telegramConfiguration();
 const database = createDatabaseContext(requireDatabaseUrl(), { maxConnections: 8 });
 const boss = createJobBoss(requireDatabaseUrl(), 5);
 let shuttingDown = false;
@@ -32,6 +35,9 @@ await boss.work<SinkingAllocationJob>(
 );
 
 log('worker.started');
+const telegram = await startTelegramRuntime(database.db, boss, log, {
+  configuration: telegramConfig,
+});
 
 async function shutDown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;
@@ -43,6 +49,7 @@ async function shutDown(signal: NodeJS.Signals): Promise<void> {
   }, 15_000);
   timeout.unref();
   try {
+    await telegram.stop();
     await boss.stop({ graceful: true, timeout: 10_000, close: true });
     await database.close();
     process.exitCode = 0;

@@ -46,6 +46,9 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-personal_cfo}:${POSTGRES_PASSWORD:-local-development-only}@postgres:5432/${POSTGRES_DB:-personal_cfo_dev}
       MIGRATIONS_DIR: /app/migrations
       NODE_ENV: production
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_ALLOWED_USER_ID: ${TELEGRAM_ALLOWED_USER_ID:-}
+      TELEGRAM_OWNER_ID: ${TELEGRAM_OWNER_ID:-}
     depends_on:
       postgres:
         condition: service_healthy

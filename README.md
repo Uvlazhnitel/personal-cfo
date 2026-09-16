@@ -1,6 +1,6 @@
 # Personal CFO
 
-Personal CFO is a deterministic, self-hosted financial decision system. Stage 5 provides a PostgreSQL-backed pipeline, background recalculation, local authentication, and an internal persisted-state debug view. External financial providers and user-facing product UI are not implemented.
+Personal CFO is a deterministic, self-hosted financial decision system. Stage 6 provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, and durable Telegram text input for one allowlisted owner. Bank, portfolio, voice, AI, proactive notifications, and the product PWA are not implemented.
 
 ## Requirements
 
@@ -38,6 +38,8 @@ pnpm dev:worker
 ```
 
 The web app is available at [http://localhost:3000](http://localhost:3000). `/api/health/live` is dependency-free; `/api/health/ready` returns `503` until PostgreSQL migrations and all four queues are present. `/debug` requires the bootstrapped local account and renders persisted data only.
+
+Telegram remains disabled when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, and `TELEGRAM_OWNER_ID` are all absent. Set all three to enable it; partial configuration fails worker startup. See [`docs/TELEGRAM.md`](docs/TELEGRAM.md) for supported commands, durability, correction, and privacy behavior.
 
 ## Docker Compose
 

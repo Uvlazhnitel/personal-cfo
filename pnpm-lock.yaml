@@ -72,6 +72,9 @@ importers:
       '@personal-cfo/financial-engine':
         specifier: workspace:*
         version: link:../../packages/financial-engine
+      '@personal-cfo/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       argon2:
         specifier: 0.45.1
         version: 0.45.1
@@ -128,7 +131,15 @@ importers:
         specifier: 10.6.0
         version: 10.6.0
 
-  packages/integrations: {}
+  packages/integrations:
+    dependencies:
+      '@personal-cfo/domain':
+        specifier: workspace:*
+        version: link:../domain
+    devDependencies:
+      '@types/node':
+        specifier: 24.13.4
+        version: 24.13.4
 
 packages:
 

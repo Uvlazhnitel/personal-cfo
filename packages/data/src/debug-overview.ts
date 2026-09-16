@@ -12,6 +12,9 @@ import {
   ownerInputVersions,
   recalculationRecords,
   sinkingRequirements,
+  telegramDeliveries,
+  telegramIntegrationStatus,
+  telegramUpdates,
 } from './schema.js';
 
 export type DebugOverview = Readonly<{
@@ -27,6 +30,7 @@ export type DebugOverview = Readonly<{
   audit: readonly unknown[];
   recalculations: readonly unknown[];
   jobs: readonly unknown[];
+  telegram: unknown;
 }>;
 
 export async function loadDebugOverview(db: Database, ownerId: string): Promise<DebugOverview> {
@@ -100,6 +104,50 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
       Record<string, unknown>
     >`select id::text, name, state::text, retry_count, created_on::text, started_on::text, completed_on::text from pgboss.job where name in ('financial.recalculate','financial.recalculate.dead','sinking.allocate','sinking.allocate.dead') order by created_on desc limit 20`,
   );
+  const telegramStatus = await db.query.telegramIntegrationStatus.findFirst({
+    where: eq(telegramIntegrationStatus.name, 'default'),
+  });
+  const clarificationCount = await db.execute(sql<{ count: string }>`
+    select count(*)::text as count
+      from telegram_pending_clarifications
+     where owner_id = ${ownerId} and status = 'active'
+  `);
+  const telegramFailures = await db
+    .select({
+      status: telegramUpdates.status,
+      parserOutcome: telegramUpdates.parserOutcome,
+      proposalKind: telegramUpdates.proposalKind,
+      safeErrorCategory: telegramUpdates.safeErrorCategory,
+      receivedAt: telegramUpdates.receivedAt,
+      processedAt: telegramUpdates.processedAt,
+    })
+    .from(telegramUpdates)
+    .where(
+      and(
+        eq(telegramUpdates.ownerId, ownerId),
+        sql`${telegramUpdates.status} in ('failed','unsupported')`,
+      ),
+    )
+    .orderBy(desc(telegramUpdates.receivedAt))
+    .limit(10);
+  const deliveryFailures = await db
+    .select({
+      purpose: telegramDeliveries.purpose,
+      status: telegramDeliveries.status,
+      attemptCount: telegramDeliveries.attemptCount,
+      safeErrorCategory: telegramDeliveries.safeErrorCategory,
+      createdAt: telegramDeliveries.createdAt,
+      completedAt: telegramDeliveries.completedAt,
+    })
+    .from(telegramDeliveries)
+    .where(
+      and(
+        eq(telegramDeliveries.ownerId, ownerId),
+        sql`${telegramDeliveries.status} in ('failed','uncertain','retryable')`,
+      ),
+    )
+    .orderBy(desc(telegramDeliveries.createdAt))
+    .limit(10);
   const rawCounts = countsResult.rows[0] ?? {};
   const entityCounts = Object.freeze(
     Object.fromEntries(Object.entries(rawCounts).map(([key, value]) => [key, String(value)])),
@@ -117,5 +165,21 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
     audit: Object.freeze(audit),
     recalculations: Object.freeze(recalculations),
     jobs: Object.freeze(jobsResult.rows),
+    telegram: Object.freeze({
+      status:
+        telegramStatus === undefined
+          ? null
+          : Object.freeze({
+              enabled: telegramStatus.enabled,
+              status: telegramStatus.status,
+              hasProcessedUpdate: telegramStatus.lastProcessedUpdateId !== null,
+              lastProcessedAt: telegramStatus.lastProcessedAt,
+              lastErrorCategory: telegramStatus.lastErrorCategory,
+              updatedAt: telegramStatus.updatedAt,
+            }),
+      pendingClarifications: clarificationCount.rows[0]?.['count'] ?? '0',
+      processingFailures: Object.freeze(telegramFailures),
+      deliveryFailures: Object.freeze(deliveryFailures),
+    }),
   });
 }

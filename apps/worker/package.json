@@ -19,6 +19,7 @@
     "@personal-cfo/data": "workspace:*",
     "@personal-cfo/domain": "workspace:*",
     "@personal-cfo/financial-engine": "workspace:*",
+    "@personal-cfo/integrations": "workspace:*",
     "argon2": "0.45.1",
     "decimal.js": "10.6.0",
     "drizzle-orm": "0.45.2",
