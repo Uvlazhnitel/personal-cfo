@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 
 import { and, eq } from 'drizzle-orm';
 import type { PgBoss } from 'pg-boss';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
   auditEvents,
@@ -10,8 +10,10 @@ import {
   claimTelegramUpdate,
   completeTelegramDelivery,
   cashReconciliations,
+  commandRecords,
   createDatabaseContext,
   createJobBoss,
+  decodeSourceJson,
   economicFlows,
   engineRuns,
   ensureSyntheticOwner,
@@ -23,6 +25,7 @@ import {
   ownerInputVersions,
   persistTelegramUpdatePage,
   primarySalaryTriggers,
+  recordTelegramProcessingFailure,
   JOB_QUEUES,
   recalculationRecords,
   saveFinancialEngineSource,
@@ -111,6 +114,8 @@ suite('Telegram text input lifecycle', () => {
     await context.close();
   });
 
+  afterEach(() => vi.restoreAllMocks());
+
   function rawUpdate(
     text: string,
     updateId: bigint,
@@ -129,6 +134,23 @@ suite('Telegram text input lifecycle', () => {
           : { reply_to_message: { message_id: Number(options.replyToMessageId) } }),
       },
     };
+  }
+
+  async function persistAt(text: string, updateId: bigint, now: string): Promise<void> {
+    await persistTelegramUpdatePage(context.db, {
+      sourceKey: SOURCE,
+      ownerId,
+      allowedUserId: ALLOWED,
+      updates: [normalizeTelegramUpdate(rawUpdate(text, updateId))],
+      now,
+    });
+  }
+
+  function failNextBossSends(failures: number): void {
+    const send = vi.spyOn(boss, 'send');
+    for (let index = 0; index < failures; index += 1) {
+      send.mockRejectedValueOnce(new Error('Injected transient pg-boss send failure.'));
+    }
   }
 
   async function ingest(
@@ -196,6 +218,266 @@ suite('Telegram text input lifecycle', () => {
     });
     expect(update).toMatchObject({ status: 'completed', proposalKind: 'cash_expense' });
     expect(update?.messageText).toBeNull();
+  });
+
+  it('retries a rolled-back pg-boss enqueue and commits one financial effect', async () => {
+    const updateId = nextUpdateId++;
+    const firstAttemptAt = '2026-09-16T12:00:00.000Z';
+    const retryAt = '2026-09-16T12:00:01.000Z';
+    const transactionsBefore = await context.db.select().from(financialTransactions);
+    const flowsBefore = await context.db.select().from(economicFlows);
+    const recalculationsBefore = await context.db.select().from(recalculationRecords);
+    const deliveriesBefore = await context.db.select().from(telegramDeliveries);
+    const versionBefore = await context.db.query.ownerInputVersions.findFirst({
+      where: eq(ownerInputVersions.ownerId, ownerId),
+    });
+    await persistAt('€13.37 cash groceries', updateId, firstAttemptAt);
+
+    const firstClaim = await claimTelegramUpdate(context.db, SOURCE, firstAttemptAt);
+    expect(firstClaim).toMatchObject({ updateId, attemptCount: 1 });
+    failNextBossSends(1);
+    await processTelegramUpdate(context.db, boss, firstClaim!, {
+      now: () => firstAttemptAt,
+    });
+    const retryable = await context.db.query.telegramUpdates.findFirst({
+      where: and(eq(telegramUpdates.sourceKey, SOURCE), eq(telegramUpdates.updateId, updateId)),
+    });
+    expect(retryable).toMatchObject({
+      status: 'retryable',
+      attemptCount: 1,
+      safeErrorCategory: 'telegram_processing_failed',
+    });
+    expect(new Date(retryable!.nextProcessingAttemptAt!).toISOString()).toBe(retryAt);
+    expect(retryable?.messageText).toBe('€13.37 cash groceries');
+    expect(await claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:00:00.999Z')).toBeNull();
+
+    const secondClaim = await claimTelegramUpdate(context.db, SOURCE, retryAt);
+    expect(secondClaim).toMatchObject({ updateId, attemptCount: 2 });
+    await processTelegramUpdate(context.db, boss, secondClaim!, { now: () => retryAt });
+
+    expect(await context.db.select().from(financialTransactions)).toHaveLength(
+      transactionsBefore.length + 1,
+    );
+    expect(await context.db.select().from(economicFlows)).toHaveLength(flowsBefore.length + 1);
+    expect(await context.db.select().from(recalculationRecords)).toHaveLength(
+      recalculationsBefore.length + 1,
+    );
+    expect(await context.db.select().from(telegramDeliveries)).toHaveLength(
+      deliveriesBefore.length + 1,
+    );
+    const versionAfter = await context.db.query.ownerInputVersions.findFirst({
+      where: eq(ownerInputVersions.ownerId, ownerId),
+    });
+    expect(versionAfter?.version).toBe(versionBefore!.version + 1n);
+    const commands = await context.db
+      .select()
+      .from(commandRecords)
+      .where(
+        and(
+          eq(commandRecords.ownerId, ownerId),
+          eq(commandRecords.idempotencyKey, `telegram:${SOURCE}:${updateId}:cash_expense`),
+        ),
+      );
+    expect(commands).toHaveLength(1);
+    expect(commands[0]).toMatchObject({ status: 'completed' });
+    const completed = await context.db.query.telegramUpdates.findFirst({
+      where: and(eq(telegramUpdates.sourceKey, SOURCE), eq(telegramUpdates.updateId, updateId)),
+    });
+    expect(completed).toMatchObject({ status: 'completed', attemptCount: 2 });
+    expect(completed?.messageText).toBeNull();
+    expect(completed?.nextProcessingAttemptAt).toBeNull();
+
+    const delivery = await claimTelegramDelivery(context.db, SOURCE, retryAt);
+    expect(delivery).not.toBeNull();
+    await completeTelegramDelivery(context.db, {
+      delivery: delivery!,
+      outcome: 'sent',
+      botMessageId: nextBotMessageId++,
+      now: retryAt,
+    });
+  });
+
+  it('exhausts three retryable processing attempts without a partial financial effect', async () => {
+    const updateId = nextUpdateId++;
+    const attemptTimes = [
+      '2026-09-16T12:10:00.000Z',
+      '2026-09-16T12:10:01.000Z',
+      '2026-09-16T12:10:03.000Z',
+    ] as const;
+    const transactionsBefore = await context.db.select().from(financialTransactions);
+    const flowsBefore = await context.db.select().from(economicFlows);
+    const recalculationsBefore = await context.db.select().from(recalculationRecords);
+    const versionBefore = await context.db.query.ownerInputVersions.findFirst({
+      where: eq(ownerInputVersions.ownerId, ownerId),
+    });
+    await persistAt('€14.41 cash taxi', updateId, attemptTimes[0]);
+    failNextBossSends(3);
+    for (const [index, attemptAt] of attemptTimes.entries()) {
+      const claimed = await claimTelegramUpdate(context.db, SOURCE, attemptAt);
+      expect(claimed).toMatchObject({ updateId, attemptCount: index + 1 });
+      await processTelegramUpdate(context.db, boss, claimed!, {
+        now: () => attemptAt,
+      });
+    }
+
+    const failed = await context.db.query.telegramUpdates.findFirst({
+      where: and(eq(telegramUpdates.sourceKey, SOURCE), eq(telegramUpdates.updateId, updateId)),
+    });
+    expect(failed).toMatchObject({
+      status: 'failed',
+      attemptCount: 3,
+      safeErrorCategory: 'telegram_processing_failed',
+    });
+    expect(failed?.messageText).toBeNull();
+    expect(failed?.nextProcessingAttemptAt).toBeNull();
+    expect(await context.db.select().from(financialTransactions)).toHaveLength(
+      transactionsBefore.length,
+    );
+    expect(await context.db.select().from(economicFlows)).toHaveLength(flowsBefore.length);
+    expect(await context.db.select().from(recalculationRecords)).toHaveLength(
+      recalculationsBefore.length,
+    );
+    const versionAfter = await context.db.query.ownerInputVersions.findFirst({
+      where: eq(ownerInputVersions.ownerId, ownerId),
+    });
+    expect(versionAfter?.version).toBe(versionBefore?.version);
+    expect(
+      await context.db
+        .select()
+        .from(commandRecords)
+        .where(
+          and(
+            eq(commandRecords.ownerId, ownerId),
+            eq(commandRecords.idempotencyKey, `telegram:${SOURCE}:${updateId}:cash_expense`),
+          ),
+        ),
+    ).toHaveLength(0);
+    expect(await claimTelegramUpdate(context.db, SOURCE, '2026-09-17T12:10:03.000Z')).toBeNull();
+    const failureDelivery = await claimTelegramDelivery(
+      context.db,
+      SOURCE,
+      '2026-09-16T12:10:03.000Z',
+    );
+    expect(failureDelivery).toMatchObject({
+      updateId,
+      text: 'I couldn’t process this entry. Please send it again.',
+      attemptCount: 1,
+    });
+    await completeTelegramDelivery(context.db, {
+      delivery: failureDelivery!,
+      outcome: 'sent',
+      botMessageId: nextBotMessageId++,
+      now: '2026-09-16T12:10:03.000Z',
+    });
+  });
+
+  it('expires retryable text after 24 hours without resurrecting the update', async () => {
+    const updateId = nextUpdateId++;
+    const receivedAt = '2026-09-16T12:15:00.000Z';
+    await persistAt('€10 cash lunch', updateId, receivedAt);
+    const claimed = await claimTelegramUpdate(context.db, SOURCE, receivedAt);
+    expect(claimed).toMatchObject({ updateId, attemptCount: 1 });
+    await recordTelegramProcessingFailure(
+      context.db,
+      claimed!,
+      { kind: 'retryable', category: 'telegram_processing_failed' },
+      receivedAt,
+    );
+    const expiredAt = '2026-09-17T12:15:00.001Z';
+    await expireTelegramState(context.db, SOURCE, expiredAt);
+    const expired = await context.db.query.telegramUpdates.findFirst({
+      where: and(eq(telegramUpdates.sourceKey, SOURCE), eq(telegramUpdates.updateId, updateId)),
+    });
+    expect(expired).toMatchObject({
+      status: 'expired',
+      safeErrorCategory: 'retention_expired',
+    });
+    expect(expired?.messageText).toBeNull();
+    expect(expired?.nextProcessingAttemptAt).toBeNull();
+    expect(await claimTelegramUpdate(context.db, SOURCE, expiredAt)).toBeNull();
+  });
+
+  it('reclaims a stale processing lease and allows only one concurrent claim', async () => {
+    const staleUpdateId = nextUpdateId++;
+    await persistAt('€11 cash groceries', staleUpdateId, '2026-09-16T12:20:00.000Z');
+    const abandoned = await claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:20:00.000Z');
+    expect(abandoned).toMatchObject({ updateId: staleUpdateId, attemptCount: 1 });
+    const reclaimed = await claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:25:00.001Z');
+    expect(reclaimed).toMatchObject({ updateId: staleUpdateId, attemptCount: 2 });
+    await processTelegramUpdate(context.db, boss, reclaimed!, {
+      now: () => '2026-09-16T12:25:00.001Z',
+    });
+
+    const concurrentUpdateId = nextUpdateId++;
+    await persistAt('€12 cash sport', concurrentUpdateId, '2026-09-16T12:30:00.000Z');
+    const claims = await Promise.all([
+      claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:30:00.000Z'),
+      claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:30:00.000Z'),
+    ]);
+    expect(claims.filter((claim) => claim !== null)).toHaveLength(1);
+    expect(claims.filter((claim) => claim === null)).toHaveLength(1);
+    const claimed = claims.find((claim) => claim !== null)!;
+    expect(claimed).toMatchObject({ updateId: concurrentUpdateId, attemptCount: 1 });
+    await processTelegramUpdate(context.db, boss, claimed, {
+      now: () => '2026-09-16T12:30:00.000Z',
+    });
+
+    for (const updateId of [staleUpdateId, concurrentUpdateId]) {
+      const rows = await context.db
+        .select()
+        .from(commandRecords)
+        .where(
+          and(
+            eq(commandRecords.ownerId, ownerId),
+            eq(commandRecords.idempotencyKey, `telegram:${SOURCE}:${updateId}:cash_expense`),
+          ),
+        );
+      expect(rows).toHaveLength(1);
+    }
+    for (;;) {
+      const delivery = await claimTelegramDelivery(context.db, SOURCE, '2026-09-16T12:30:00.000Z');
+      if (delivery === null) break;
+      await completeTelegramDelivery(context.db, {
+        delivery,
+        outcome: 'sent',
+        botMessageId: nextBotMessageId++,
+        now: '2026-09-16T12:30:00.000Z',
+      });
+    }
+  });
+
+  it('terminalizes a stale lease after all three claimed attempts are consumed', async () => {
+    const updateId = nextUpdateId++;
+    const claimTimes = [
+      '2026-09-16T12:40:00.000Z',
+      '2026-09-16T12:45:00.001Z',
+      '2026-09-16T12:50:00.002Z',
+    ] as const;
+    await persistAt('€15 cash groceries', updateId, claimTimes[0]);
+    for (const [index, claimAt] of claimTimes.entries()) {
+      expect(await claimTelegramUpdate(context.db, SOURCE, claimAt)).toMatchObject({
+        updateId,
+        attemptCount: index + 1,
+      });
+    }
+    expect(await claimTelegramUpdate(context.db, SOURCE, '2026-09-16T12:55:00.003Z')).toBeNull();
+    const failed = await context.db.query.telegramUpdates.findFirst({
+      where: and(eq(telegramUpdates.sourceKey, SOURCE), eq(telegramUpdates.updateId, updateId)),
+    });
+    expect(failed).toMatchObject({
+      status: 'failed',
+      attemptCount: 3,
+      safeErrorCategory: 'processing_lease_exhausted',
+    });
+    expect(failed?.messageText).toBeNull();
+    const delivery = await claimTelegramDelivery(context.db, SOURCE, '2026-09-16T12:55:00.003Z');
+    expect(delivery).toMatchObject({ updateId });
+    await completeTelegramDelivery(context.db, {
+      delivery: delivery!,
+      outcome: 'sent',
+      botMessageId: nextBotMessageId++,
+      now: '2026-09-16T12:55:00.003Z',
+    });
   });
 
   it('records side-hustle income without a primary salary trigger', async () => {
@@ -304,6 +586,38 @@ suite('Telegram text input lifecycle', () => {
       allocationPolicy: 'manual',
       status: 'active',
     });
+  });
+
+  it('preserves future-expense intent through a missing-date clarification', async () => {
+    const before = await context.db.select().from(sinkingFunds);
+    const initial = await ingest('future expense Iceland €1800');
+    const persistedInitial = await context.db.query.telegramUpdates.findFirst({
+      where: and(
+        eq(telegramUpdates.sourceKey, SOURCE),
+        eq(telegramUpdates.updateId, initial.updateId),
+      ),
+    });
+    expect(persistedInitial).toMatchObject({
+      status: 'awaiting_clarification',
+      proposalKind: 'future_expense',
+    });
+    expect(await context.db.select().from(sinkingFunds)).toHaveLength(before.length);
+
+    await ingest('2027-06-01');
+    const after = await context.db.select().from(sinkingFunds);
+    expect(after).toHaveLength(before.length + 1);
+    expect(after.at(-1)).toMatchObject({
+      targetMinor: 180_000n,
+      dueDate: '2027-06-01',
+      allocationPolicy: 'manual',
+      status: 'active',
+    });
+    expect(decodeSourceJson(after.at(-1)!.payload)).toMatchObject({ label: 'Iceland' });
+    const active = await context.db
+      .select()
+      .from(telegramPendingClarifications)
+      .where(eq(telegramPendingClarifications.status, 'active'));
+    expect(active).toHaveLength(0);
   });
 
   it('treats an exact cash count as no-change and records a nonzero reconciliation', async () => {
@@ -511,6 +825,60 @@ suite('Telegram text input lifecycle', () => {
     expect(replayedBeforePoll).toBe(true);
     expect(offsets.slice(0, 2)).toEqual([100n, 102n]);
     expect(sends).toBe(1);
+    expect(aborted).toBe(true);
+  });
+
+  it('shortens long polling when a durable processing retry is due', async () => {
+    const retrySource = 'c'.repeat(64);
+    const updateId = 5_000n;
+    const failedAt = '2026-09-16T13:00:00.000Z';
+    await persistTelegramUpdatePage(context.db, {
+      sourceKey: retrySource,
+      ownerId,
+      allowedUserId: ALLOWED,
+      updates: [normalizeTelegramUpdate(rawUpdate('€16 cash groceries', updateId))],
+      now: failedAt,
+    });
+    const claimed = await claimTelegramUpdate(context.db, retrySource, failedAt);
+    await recordTelegramProcessingFailure(
+      context.db,
+      claimed!,
+      { kind: 'retryable', category: 'telegram_processing_failed' },
+      failedAt,
+    );
+    const timeouts: number[] = [];
+    let aborted = false;
+    const api: TelegramApi = {
+      getUpdates: (request) => {
+        timeouts.push(request.timeoutSeconds);
+        return new Promise((resolvePromise) => {
+          request.signal?.addEventListener(
+            'abort',
+            () => {
+              aborted = true;
+              resolvePromise([]);
+            },
+            { once: true },
+          );
+        });
+      },
+      sendMessage: () => Promise.resolve({ messageId: 30_000n }),
+    };
+    const runtime = await startTelegramRuntime(context.db, boss, () => undefined, {
+      configuration: {
+        enabled: true,
+        token: `123456:${'a'.repeat(32)}`,
+        sourceKey: retrySource,
+        allowedUserId: ALLOWED,
+        ownerId,
+      },
+      api,
+      clock: { now: () => '2026-09-16T13:00:00.250Z' },
+      sleeper: () => Promise.resolve(),
+    });
+    await waitUntil(() => timeouts.length === 1, 'the retry-bounded Telegram poll');
+    await runtime.stop();
+    expect(timeouts).toEqual([1]);
     expect(aborted).toBe(true);
   });
 

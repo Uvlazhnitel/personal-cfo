@@ -625,6 +625,7 @@ export const telegramUpdates = pgTable(
     attemptCount: integer('attempt_count').notNull().default(0),
     receivedAt: instant('received_at').notNull(),
     processingStartedAt: instant('processing_started_at'),
+    nextProcessingAttemptAt: instant('next_processing_attempt_at'),
     processedAt: instant('processed_at'),
   },
   (table) => [
@@ -632,11 +633,21 @@ export const telegramUpdates = pgTable(
     uniqueIndex('telegram_message_identity_uq')
       .on(table.sourceKey, table.chatId, table.messageId)
       .where(sql`${table.messageId} is not null`),
-    index('telegram_updates_claim_idx').on(table.sourceKey, table.status, table.receivedAt),
+    index('telegram_updates_claim_idx').on(
+      table.sourceKey,
+      table.status,
+      table.nextProcessingAttemptAt,
+      table.processingStartedAt,
+      table.updateId,
+    ),
     index('telegram_updates_owner_idx').on(table.ownerId, table.receivedAt),
     check(
       'telegram_update_status_ck',
-      sql`${table.status} in ('received','processing','awaiting_clarification','completed','rejected','unsupported','failed','expired')`,
+      sql`${table.status} in ('received','processing','retryable','awaiting_clarification','completed','rejected','unsupported','failed','expired')`,
+    ),
+    check(
+      'telegram_update_retry_at_ck',
+      sql`(${table.status} = 'retryable' and ${table.nextProcessingAttemptAt} is not null) or (${table.status} <> 'retryable' and ${table.nextProcessingAttemptAt} is null)`,
     ),
   ],
 );

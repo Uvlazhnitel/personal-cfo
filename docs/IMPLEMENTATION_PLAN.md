@@ -112,7 +112,7 @@ Required reconciliation regressions are:
 
 ## Stage 6 — Telegram Text Input
 
-**Status:** Implemented on 2026-09-16; live bot credentials and production deployment remain operator concerns.
+**Status:** Implemented on 2026-09-16, including the Stage 6.1 durable processing-retry and parser-closure repair; live bot credentials and production deployment remain operator concerns.
 
 **Goal:** Record cash income, cash spending, and future-expense commands from the whitelisted user.
 

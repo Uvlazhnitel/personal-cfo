@@ -87,6 +87,67 @@ describe('Telegram deterministic parser', () => {
     });
   });
 
+  it.each([
+    ['future expense Japan €1500', 'Japan', 'en'],
+    ['trip Japan €1500', 'Japan', 'en'],
+    ['поездка Япония 1500 евро', 'Япония', 'ru'],
+    ['страховка 900 евро', 'страховка', 'ru'],
+  ])('preserves future-expense intent when %s has no due date', (text, label, locale) => {
+    expect(parseTelegramText(message(text))).toMatchObject({
+      confidence: 'needs_clarification',
+      missingField: 'due_date',
+      draft: { kind: 'future_expense', label, locale },
+    });
+  });
+
+  it.each([
+    ['future expense Japan by 2027-05-01', 'Japan'],
+    ['trip Japan by 2027-05-01', 'Japan'],
+    ['поездка Япония до 2027-05-01', 'Япония'],
+  ])('preserves future-expense intent when %s has no amount', (text, label) => {
+    expect(parseTelegramText(message(text))).toMatchObject({
+      confidence: 'needs_clarification',
+      missingField: 'amount',
+      draft: { kind: 'future_expense', label, dueDate: '2027-05-01' },
+    });
+  });
+
+  it('collects a missing future-expense amount before its due date', () => {
+    const initial = parseTelegramText(message('future expense Japan'));
+    expect(initial).toMatchObject({
+      confidence: 'needs_clarification',
+      missingField: 'amount',
+      draft: { kind: 'future_expense', label: 'Japan' },
+    });
+    if (initial.confidence !== 'needs_clarification') return;
+    const withAmount = mergeClarification(initial.draft, message('€1500'));
+    expect(withAmount).toMatchObject({
+      confidence: 'needs_clarification',
+      missingField: 'due_date',
+      draft: { kind: 'future_expense', amountMinor: '150000', label: 'Japan' },
+    });
+    if (withAmount.confidence !== 'needs_clarification') return;
+    expect(mergeClarification(withAmount.draft, message('2027-05-01'))).toMatchObject({
+      confidence: 'high',
+      proposal: {
+        kind: 'future_expense',
+        label: 'Japan',
+        targetMinor: 150_000n,
+        dueDate: '2027-05-01',
+      },
+    });
+  });
+
+  it.each([
+    ['€20 travel cash', 'travel'],
+    ['€12 insurance paid cash', 'other'],
+  ])('keeps explicit current spending as a cash expense: %s', (text, category) => {
+    expect(parseTelegramText(message(text))).toMatchObject({
+      confidence: 'high',
+      proposal: { kind: 'cash_expense', category },
+    });
+  });
+
   it('parses money without floating point', () => {
     expect(parseEurAmount('€12.50')).toMatchObject({ status: 'ok', amountMinor: 1_250n });
     expect(parseEurAmount('12,50 евро')).toMatchObject({ status: 'ok', amountMinor: 1_250n });

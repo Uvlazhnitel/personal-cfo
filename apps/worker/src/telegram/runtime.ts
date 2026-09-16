@@ -5,6 +5,7 @@ import {
   completeTelegramDelivery,
   configureTelegramOwnerLink,
   expireTelegramState,
+  loadNextTelegramProcessingAttemptAt,
   loadTelegramPollOffset,
   persistTelegramUpdatePage,
   setTelegramIntegrationStatus,
@@ -135,10 +136,33 @@ export async function startTelegramRuntime(
         await expireTelegramState(db, enabledConfiguration.sourceKey, clock.now());
         await drainUpdates();
         await drainDeliveries();
+        const nextProcessingAttemptAt = await loadNextTelegramProcessingAttemptAt(
+          db,
+          enabledConfiguration.sourceKey,
+        );
+        const pollNow = clock.now();
+        if (
+          nextProcessingAttemptAt !== null &&
+          new Date(nextProcessingAttemptAt).getTime() <= new Date(pollNow).getTime()
+        )
+          continue;
+        const timeoutSeconds =
+          nextProcessingAttemptAt === null
+            ? 25
+            : Math.max(
+                1,
+                Math.min(
+                  25,
+                  Math.ceil(
+                    (new Date(nextProcessingAttemptAt).getTime() - new Date(pollNow).getTime()) /
+                      1000,
+                  ),
+                ),
+              );
         const offset = await loadTelegramPollOffset(db, enabledConfiguration.sourceKey);
         const updates = await api.getUpdates({
           offset,
-          timeoutSeconds: 25,
+          timeoutSeconds,
           signal: controller.signal,
         });
         const normalized = updates.map(normalizeTelegramUpdate);

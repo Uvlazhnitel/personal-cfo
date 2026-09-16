@@ -16,6 +16,18 @@ import {
 } from './schema.js';
 import { generateUuidV7 } from './uuid-v7.js';
 
+export const TELEGRAM_PROCESSING_MAX_ATTEMPTS = 3;
+const TELEGRAM_PROCESSING_LEASE_MS = 5 * 60_000;
+
+export type TelegramProcessingFailure = Readonly<{
+  kind: 'retryable' | 'terminal';
+  category: string;
+}>;
+
+export type TelegramProcessingFailureResult =
+  | Readonly<{ status: 'retryable'; nextProcessingAttemptAt: string }>
+  | Readonly<{ status: 'failed' | 'already_terminal'; nextProcessingAttemptAt: null }>;
+
 export type PersistableTelegramUpdate =
   | Readonly<{
       kind: 'ignored';
@@ -84,6 +96,12 @@ export type TelegramClarification = Readonly<{
   invalidAttempts: number;
   expiresAt: string;
 }>;
+
+function processingFailureReply(locale: 'en' | 'ru'): string {
+  return locale === 'ru'
+    ? 'Не удалось обработать запись. Отправьте её ещё раз.'
+    : 'I couldn’t process this entry. Please send it again.';
+}
 
 export async function configureTelegramOwnerLink(
   db: Database,
@@ -319,30 +337,110 @@ export async function claimTelegramUpdate(
   sourceKey: string,
   now: string,
 ): Promise<ClaimedTelegramUpdate | null> {
-  const stale = new Date(new Date(now).getTime() - 5 * 60_000).toISOString();
-  const rows = await db.execute(sql<Record<string, unknown>>`
-    with candidate as (
-      select source_key, update_id
-      from telegram_updates
-      where source_key = ${sourceKey}
-        and (
-          status = 'received'
-          or (status = 'processing' and processing_started_at < ${stale}::timestamptz)
-        )
-      order by update_id
-      for update skip locked
-      limit 1
-    )
-    update telegram_updates u
-       set status = 'processing',
-           processing_started_at = ${now}::timestamptz,
-           attempt_count = u.attempt_count + 1
-      from candidate c
-     where u.source_key = c.source_key and u.update_id = c.update_id
-    returning u.source_key, u.update_id, u.owner_id, u.chat_id, u.sender_id,
-              u.message_id, u.reply_to_message_id, u.message_date, u.message_text,
-              u.text_hash, u.locale, u.attempt_count
-  `);
+  const stale = new Date(new Date(now).getTime() - TELEGRAM_PROCESSING_LEASE_MS).toISOString();
+  const rows = await db.transaction(async (tx) => {
+    const exhausted = await tx.execute(sql<Record<string, unknown>>`
+      update telegram_updates
+         set status = 'failed',
+             message_text = null,
+             parser_outcome = 'failed',
+             proposal_kind = null,
+             safe_error_category = 'processing_lease_exhausted',
+             processing_started_at = null,
+             next_processing_attempt_at = null,
+             processed_at = ${now}::timestamptz
+       where source_key = ${sourceKey}
+         and status = 'processing'
+         and attempt_count >= ${TELEGRAM_PROCESSING_MAX_ATTEMPTS}
+         and processing_started_at < ${stale}::timestamptz
+      returning source_key, update_id, owner_id, chat_id, message_id, locale
+    `);
+    for (const row of exhausted.rows) {
+      if (
+        typeof row['owner_id'] !== 'string' ||
+        row['chat_id'] === null ||
+        row['message_id'] === null ||
+        (row['locale'] !== 'en' && row['locale'] !== 'ru')
+      )
+        continue;
+      await tx
+        .insert(telegramDeliveries)
+        .values({
+          id: generateUuidV7('telegram-delivery'),
+          sourceKey: String(row['source_key']),
+          ownerId: row['owner_id'],
+          updateId: BigInt(row['update_id'] as string),
+          chatId: BigInt(row['chat_id'] as string),
+          replyToMessageId: BigInt(row['message_id'] as string),
+          purpose: 'processing_failed',
+          responseText: processingFailureReply(row['locale']),
+          status: 'pending',
+          attemptCount: 0,
+          botMessageId: null,
+          safeErrorCategory: null,
+          nextAttemptAt: now,
+          createdAt: now,
+          completedAt: null,
+        })
+        .onConflictDoNothing();
+    }
+    if (exhausted.rows.length > 0) {
+      await tx
+        .insert(telegramIntegrationStatus)
+        .values({
+          name: 'default',
+          enabled: true,
+          sourceKey,
+          status: 'degraded',
+          lastProcessedUpdateId: null,
+          lastProcessedAt: null,
+          lastErrorCategory: 'processing_lease_exhausted',
+          updatedAt: now,
+        })
+        .onConflictDoUpdate({
+          target: telegramIntegrationStatus.name,
+          set: {
+            status: 'degraded',
+            lastErrorCategory: 'processing_lease_exhausted',
+            updatedAt: now,
+          },
+        });
+    }
+    return tx.execute(sql<Record<string, unknown>>`
+      with candidate as (
+        select source_key, update_id
+        from telegram_updates
+        where source_key = ${sourceKey}
+          and (
+            status = 'received'
+            or (
+              status = 'retryable'
+              and next_processing_attempt_at <= ${now}::timestamptz
+              and attempt_count < ${TELEGRAM_PROCESSING_MAX_ATTEMPTS}
+            )
+            or (
+              status = 'processing'
+              and processing_started_at < ${stale}::timestamptz
+              and attempt_count < ${TELEGRAM_PROCESSING_MAX_ATTEMPTS}
+            )
+          )
+        order by update_id
+        for update skip locked
+        limit 1
+      )
+      update telegram_updates u
+         set status = 'processing',
+             processing_started_at = ${now}::timestamptz,
+             next_processing_attempt_at = null,
+             safe_error_category = null,
+             attempt_count = u.attempt_count + 1
+        from candidate c
+       where u.source_key = c.source_key and u.update_id = c.update_id
+      returning u.source_key, u.update_id, u.owner_id, u.chat_id, u.sender_id,
+                u.message_id, u.reply_to_message_id, u.message_date, u.message_text,
+                u.text_hash, u.locale, u.attempt_count
+    `);
+  });
   const row = rows.rows[0];
   if (row === undefined) return null;
   if (
@@ -375,6 +473,19 @@ export async function claimTelegramUpdate(
   });
 }
 
+export async function loadNextTelegramProcessingAttemptAt(
+  db: Database,
+  sourceKey: string,
+): Promise<string | null> {
+  const result = await db.execute(sql<{ next_attempt_at: string | null }>`
+    select min(next_processing_attempt_at)::text as next_attempt_at
+      from telegram_updates
+     where source_key = ${sourceKey} and status = 'retryable'
+  `);
+  const value = result.rows[0]?.['next_attempt_at'];
+  return typeof value === 'string' ? new Date(value).toISOString() : null;
+}
+
 export async function expireTelegramState(
   db: Database,
   sourceKey: string,
@@ -398,13 +509,19 @@ export async function expireTelegramState(
       .set({
         status: 'expired',
         messageText: null,
+        processingStartedAt: null,
+        nextProcessingAttemptAt: null,
         processedAt: now,
         safeErrorCategory: 'retention_expired',
       })
       .where(
         and(
           eq(telegramUpdates.sourceKey, sourceKey),
-          or(eq(telegramUpdates.status, 'received'), eq(telegramUpdates.status, 'processing')),
+          or(
+            eq(telegramUpdates.status, 'received'),
+            eq(telegramUpdates.status, 'processing'),
+            eq(telegramUpdates.status, 'retryable'),
+          ),
           lt(telegramUpdates.receivedAt, rawCutoff),
         ),
       );
@@ -678,6 +795,8 @@ export async function finalizeTelegramUpdate(
       entityType: input.entityType ?? null,
       entityId: input.entityId ?? null,
       safeErrorCategory: input.errorCategory ?? null,
+      processingStartedAt: null,
+      nextProcessingAttemptAt: null,
       processedAt: input.now,
     })
     .where(
@@ -908,20 +1027,91 @@ export async function completeTelegramDelivery(
   });
 }
 
-export async function failTelegramUpdate(
+export async function recordTelegramProcessingFailure(
   db: Database,
   update: ClaimedTelegramUpdate,
-  category: string,
+  failure: TelegramProcessingFailure,
   now: string,
-): Promise<void> {
-  await db.transaction((tx) =>
-    finalizeTelegramUpdate(tx, {
-      update,
-      status: 'failed',
-      parserOutcome: 'failed',
-      proposalKind: null,
-      errorCategory: category,
-      now,
-    }),
-  );
+): Promise<TelegramProcessingFailureResult> {
+  return db.transaction(async (tx) => {
+    const retryable =
+      failure.kind === 'retryable' && update.attemptCount < TELEGRAM_PROCESSING_MAX_ATTEMPTS;
+    const nextProcessingAttemptAt = retryable
+      ? new Date(
+          new Date(now).getTime() + 1000 * 2 ** Math.max(0, update.attemptCount - 1),
+        ).toISOString()
+      : null;
+    const rows = await tx
+      .update(telegramUpdates)
+      .set(
+        retryable
+          ? {
+              status: 'retryable',
+              processingStartedAt: null,
+              nextProcessingAttemptAt,
+              processedAt: null,
+              safeErrorCategory: failure.category,
+            }
+          : {
+              status: 'failed',
+              messageText: null,
+              parserOutcome: 'failed',
+              proposalKind: null,
+              commandId: null,
+              entityType: null,
+              entityId: null,
+              safeErrorCategory: failure.category,
+              processingStartedAt: null,
+              nextProcessingAttemptAt: null,
+              processedAt: now,
+            },
+      )
+      .where(
+        and(
+          eq(telegramUpdates.sourceKey, update.sourceKey),
+          eq(telegramUpdates.updateId, update.updateId),
+          eq(telegramUpdates.status, 'processing'),
+          eq(telegramUpdates.attemptCount, update.attemptCount),
+        ),
+      )
+      .returning({ updateId: telegramUpdates.updateId });
+    if (rows.length === 0) {
+      return Object.freeze({ status: 'already_terminal' as const, nextProcessingAttemptAt: null });
+    }
+    if (!retryable && failure.kind === 'retryable') {
+      await queueTelegramDelivery(tx, {
+        update,
+        purpose: 'processing_failed',
+        text: processingFailureReply(update.locale),
+        now,
+      });
+    }
+    await tx
+      .insert(telegramIntegrationStatus)
+      .values({
+        name: 'default',
+        enabled: true,
+        sourceKey: update.sourceKey,
+        status: 'degraded',
+        lastProcessedUpdateId: retryable ? null : update.updateId,
+        lastProcessedAt: retryable ? null : now,
+        lastErrorCategory: failure.category,
+        updatedAt: now,
+      })
+      .onConflictDoUpdate({
+        target: telegramIntegrationStatus.name,
+        set: {
+          status: 'degraded',
+          ...(retryable ? {} : { lastProcessedUpdateId: update.updateId, lastProcessedAt: now }),
+          lastErrorCategory: failure.category,
+          updatedAt: now,
+        },
+      });
+    return retryable
+      ? Object.freeze({
+          status: 'retryable' as const,
+          nextProcessingAttemptAt: nextProcessingAttemptAt!,
+        })
+      : Object.freeze({ status: 'failed' as const, nextProcessingAttemptAt: null });
+  });
 }

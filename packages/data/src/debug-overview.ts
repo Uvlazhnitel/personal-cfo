@@ -112,11 +112,18 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
       from telegram_pending_clarifications
      where owner_id = ${ownerId} and status = 'active'
   `);
+  const retryableUpdateCount = await db.execute(sql<{ count: string }>`
+    select count(*)::text as count
+      from telegram_updates
+     where owner_id = ${ownerId} and status = 'retryable'
+  `);
   const telegramFailures = await db
     .select({
       status: telegramUpdates.status,
       parserOutcome: telegramUpdates.parserOutcome,
       proposalKind: telegramUpdates.proposalKind,
+      attemptCount: telegramUpdates.attemptCount,
+      nextProcessingAttemptAt: telegramUpdates.nextProcessingAttemptAt,
       safeErrorCategory: telegramUpdates.safeErrorCategory,
       receivedAt: telegramUpdates.receivedAt,
       processedAt: telegramUpdates.processedAt,
@@ -125,7 +132,7 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
     .where(
       and(
         eq(telegramUpdates.ownerId, ownerId),
-        sql`${telegramUpdates.status} in ('failed','unsupported')`,
+        sql`${telegramUpdates.status} in ('retryable','failed','unsupported')`,
       ),
     )
     .orderBy(desc(telegramUpdates.receivedAt))
@@ -178,6 +185,7 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
               updatedAt: telegramStatus.updatedAt,
             }),
       pendingClarifications: clarificationCount.rows[0]?.['count'] ?? '0',
+      retryableUpdates: retryableUpdateCount.rows[0]?.['count'] ?? '0',
       processingFailures: Object.freeze(telegramFailures),
       deliveryFailures: Object.freeze(deliveryFailures),
     }),

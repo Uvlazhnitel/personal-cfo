@@ -24,6 +24,7 @@ import type {
   StandardSpendingCategoryCode,
 } from '@personal-cfo/domain';
 import {
+  DataConflictError,
   DataInvariantError,
   advanceTelegramClarification,
   appendCashActivity,
@@ -33,7 +34,6 @@ import {
   createTelegramClarification,
   createTelegramMessageLink,
   executeFinancialCommand,
-  failTelegramUpdate,
   finalizeTelegramUpdate,
   findTelegramCorrectionTarget,
   generateUuidV7,
@@ -43,10 +43,16 @@ import {
   loadEvaluationParts,
   loadSingleCashAccountState,
   queueTelegramDelivery,
+  recordTelegramProcessingFailure,
   resolveTelegramClarification,
   supersedeTelegramMessageLink,
 } from '@personal-cfo/data';
-import type { ClaimedTelegramUpdate, Database, PersistedTelegramDraft } from '@personal-cfo/data';
+import type {
+  ClaimedTelegramUpdate,
+  Database,
+  PersistedTelegramDraft,
+  TelegramProcessingFailure,
+} from '@personal-cfo/data';
 import { mergeClarification, parseTelegramText } from '@personal-cfo/integrations';
 import type {
   CashExpenseProposal,
@@ -127,6 +133,13 @@ function safeInvariantResponse(error: DataInvariantError, locale: 'en' | 'ru'): 
     default:
       return null;
   }
+}
+
+export function classifyTelegramProcessingFailure(error: unknown): TelegramProcessingFailure {
+  if (error instanceof DataInvariantError || error instanceof DataConflictError) {
+    return Object.freeze({ kind: 'terminal', category: error.code });
+  }
+  return Object.freeze({ kind: 'retryable', category: 'telegram_processing_failed' });
 }
 
 function categoryObservation(
@@ -848,9 +861,12 @@ export async function processTelegramUpdate(
         return;
       }
     }
-    const category =
-      error instanceof DataInvariantError ? error.code : 'telegram_processing_failed';
-    await failTelegramUpdate(db, update, category, now);
-    log('telegram.update.failed', { updateId: update.updateId.toString(), category });
+    const failure = classifyTelegramProcessingFailure(error);
+    const result = await recordTelegramProcessingFailure(db, update, failure, clock.now());
+    log(`telegram.update.${result.status}`, {
+      updateId: update.updateId.toString(),
+      category: failure.category,
+      attemptCount: update.attemptCount,
+    });
   }
 }

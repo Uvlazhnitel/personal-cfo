@@ -263,7 +263,7 @@ function futureLabel(text: string, amountToken: string | null, dueDate: string |
   return text
     .replace(amountToken ?? /$^/u, ' ')
     .replace(dueDate ?? /$^/u, ' ')
-    .replace(/\b(?:future expense|trip|by|до|поездка|на)\b/giu, ' ')
+    .replace(/(?<![\p{L}\p{N}])(?:future expense|trip|by|до|поездка|на)(?![\p{L}\p{N}])/giu, ' ')
     .replace(/\s+/gu, ' ')
     .trim()
     .slice(0, 120);
@@ -291,9 +291,11 @@ export function parseTelegramText(message: TelegramMessage): TelegramParseResult
   }
   const date = parseEconomicDate(text, message.sentAt);
   if (date.status !== 'ok') return unsupported(locale, 'invalid_date');
-  const isFuture =
-    /(?:\b(?:future expense|trip|insurance)\b|поездк|страховк)/iu.test(text) &&
-    /(?:\bby\b|до)/iu.test(text);
+  const explicitFutureIntent = /(?:\b(?:future expense|trip)\b|поездк)/iu.test(text);
+  const scheduledNounIntent = /(?:\binsurance\b|страховк)/iu.test(text);
+  const explicitCurrentSpending =
+    /(?:\b(?:paid|spent|cash)\b|потратил(?:а)?|оплатил(?:а)?|налич(?:кой|ными))/iu.test(text);
+  const isFuture = explicitFutureIntent || (scheduledNounIntent && !explicitCurrentSpending);
   if (isFuture) {
     const amount = parseEurAmount(text, false);
     const dueDates = [...text.matchAll(ISO_DATE)].map((match) => match[1]!);

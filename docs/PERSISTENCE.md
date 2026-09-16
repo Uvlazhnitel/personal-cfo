@@ -36,9 +36,9 @@ Telegram adds `cash_activity`, `sinking_fund_creation`, and `cash_correction` re
 
 ## Telegram Persistence
 
-Migration `0006` adds owner links, poll state, durable updates, bounded clarifications, delivery attempts, correction links, and integration status. Telegram numeric identifiers use PostgreSQL `BIGINT`. Update pages and monotonic offsets commit together; a higher offset is never used before the page is durable. Claims use `FOR UPDATE SKIP LOCKED`, and processing leases are reclaimable after five minutes.
+Migration `0006` adds owner links, poll state, durable updates, bounded clarifications, delivery attempts, correction links, and integration status. Migration `0007` adds the explicit processing-retry deadline and state. Telegram numeric identifiers use PostgreSQL `BIGINT`. Update pages and monotonic offsets commit together; a higher offset is never used before the page is durable. Claims use `FOR UPDATE SKIP LOCKED`; five-minute leases recover crashes, while unexpected runtime failures receive at most three total processing attempts with persisted one-second and two-second backoff.
 
-Authorized raw text exists only while processing is pending and expires after 24 hours. Clarification payloads contain structured known fields only and are cleared at terminal state. Pending reply text is cleared after success, terminal failure, uncertainty, or retention expiry. The durable audit surface retains identifiers, SHA-256 text hashes, parser outcomes, safe error categories, and entity references, not financial descriptions.
+Authorized raw text exists only while an update is received, processing, or retryable and expires after 24 hours. Clarification payloads contain structured known fields only and are cleared at terminal state. Pending reply text is cleared after success, terminal failure, uncertainty, or retention expiry. Processing retry is separate from post-commit delivery retry. The durable audit surface retains identifiers, SHA-256 text hashes, parser outcomes, attempt counts, safe error categories, and entity references, not financial descriptions.
 
 ## Development and Recovery
 

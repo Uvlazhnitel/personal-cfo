@@ -50,6 +50,13 @@
       "when": 1789563011965,
       "tag": "0006_icy_morlun",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1789590498761,
+      "tag": "0007_durable_telegram_retry",
+      "breakpoints": true
     }
   ]
 }

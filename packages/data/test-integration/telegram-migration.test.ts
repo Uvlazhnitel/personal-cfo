@@ -10,7 +10,7 @@ import type { DatabaseContext } from '../src/index.js';
 const databaseUrl = process.env['DATABASE_URL'];
 const suite = databaseUrl === undefined ? describe.skip : describe;
 
-suite('Stage 5 to Stage 6 Telegram migration', () => {
+suite('Stage 5 through Stage 6.1 Telegram migrations', () => {
   let context: DatabaseContext;
   let temporaryMigrations: string;
   const sourceMigrations = resolve(process.cwd(), 'packages/data/migrations');
@@ -50,7 +50,7 @@ suite('Stage 5 to Stage 6 Telegram migration', () => {
     await rm(temporaryMigrations, { recursive: true, force: true });
   });
 
-  it('upgrades a Stage 5 database and remains repeatable', async () => {
+  it('upgrades Stage 5 through Stage 6 and Stage 6.1, then remains repeatable', async () => {
     await migrateDatabase(context.db, temporaryMigrations);
     const before = await context.pool.query<{ table_name: string }>(
       "select table_name from information_schema.tables where table_schema = 'public' and table_name like 'telegram_%'",
@@ -67,13 +67,37 @@ suite('Stage 5 to Stage 6 Telegram migration', () => {
       join(sourceMigrations, `${stageSix.tag}.sql`),
       join(temporaryMigrations, basename(`${stageSix.tag}.sql`)),
     );
+    await writeFile(
+      join(temporaryMigrations, 'meta/_journal.json'),
+      JSON.stringify({
+        ...fullJournal,
+        entries: fullJournal.entries.filter((entry) => entry.idx <= 6),
+      }),
+    );
+    await migrateDatabase(context.db, temporaryMigrations);
+
+    const afterStageSix = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'telegram_%'",
+    );
+    expect(afterStageSix.rows[0]?.count).toBe('7');
+    const beforeRepair = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.columns where table_schema = 'public' and table_name = 'telegram_updates' and column_name = 'next_processing_attempt_at'",
+    );
+    expect(beforeRepair.rows[0]?.count).toBe('0');
+
+    const stageSixRepair = fullJournal.entries.find((entry) => entry.idx === 7);
+    if (stageSixRepair === undefined) throw new Error('Stage 6.1 migration is missing.');
+    await cp(
+      join(sourceMigrations, `${stageSixRepair.tag}.sql`),
+      join(temporaryMigrations, basename(`${stageSixRepair.tag}.sql`)),
+    );
     await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
     await migrateDatabase(context.db, temporaryMigrations);
     await migrateDatabase(context.db, temporaryMigrations);
 
-    const after = await context.pool.query<{ count: string }>(
-      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'telegram_%'",
+    const afterRepair = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.columns where table_schema = 'public' and table_name = 'telegram_updates' and column_name = 'next_processing_attempt_at'",
     );
-    expect(after.rows[0]?.count).toBe('7');
+    expect(afterRepair.rows[0]?.count).toBe('1');
   });
 });

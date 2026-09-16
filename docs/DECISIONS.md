@@ -352,7 +352,7 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Reasoning:** Advancing an in-memory offset before the financial command commits can lose an update across a crash. Processing before any offset advance can needlessly retain provider backlog and does not provide stronger command atomicity.
 
-**Consequences:** Update and message identities are durably deduplicated. Five-minute leases recover crashed processors, while owner advisory locking and command idempotency provide exactly-once financial effects across concurrent workers. Telegram reply delivery remains at-most-controlled rather than claimed exactly once.
+**Consequences:** Update and message identities are durably deduplicated. Five-minute leases recover crashed processors. Explicitly observed unexpected processing failures retain bounded text and retry after one and two seconds, with three total attempts; exhaustion is terminal. Owner advisory locking and stable command idempotency provide exactly-once financial effects across retries and concurrent workers. Telegram reply delivery uses a separate state machine and remains at-most-controlled rather than claimed exactly once.
 
 ## ADR-031 — Bounded Telegram Clarification and Text Retention
 

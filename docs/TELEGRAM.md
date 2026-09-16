@@ -35,15 +35,21 @@ trip Japan €1500 by 2027-05-01
 
 Unknown clear expenses use the standard `other` category. Side-hustle income is never treated as primary salary. A future expense creates an active committed Sinking Fund with manual allocation; Telegram does not calculate a required contribution.
 
+The narrow future-expense keywords `future expense`, `trip`, `insurance`, `поездка`, and `страховка` preserve that intent when the amount or due date is missing. Clarification asks for amount first and then an ISO due date. Explicit current-spending language such as `paid cash` remains a cash expense.
+
 ## Durable inbox and replies
 
 The worker starts Telegram only after PostgreSQL and pg-boss. It first drains persisted updates and deliveries, then calls `getUpdates` with a 25-second timeout and `allowed_updates=["message"]`. Each returned page and its next offset commit together before a higher offset is used. A restart therefore replays locally pending work without losing an update already acknowledged to Telegram.
 
-Updates are unique by source key and update ID, with a second message-identity constraint. Five-minute processing leases permit crash recovery. Authorized pending text is retained for no more than 24 hours and is cleared at every terminal or clarification state. Identifiers, text hashes, parser outcomes, safe error categories, and entity links remain for audit and correction.
+Updates are unique by source key and update ID, with a second message-identity constraint. A claim creates a five-minute processing lease. A crashed worker may be reclaimed after that lease; an explicitly observed unexpected infrastructure/runtime failure instead enters `retryable` with a persisted retry time. Processing is limited to three total claims with one-second and two-second delays after the first two failures. The long-poll timeout is shortened when a local retry is due sooner than the normal 25 seconds.
+
+After the third failure, the update becomes terminal, queues one independent resend instruction, and cannot be claimed again. Deterministic parser, user, invariant, and conflict errors do not enter this retry loop. Financial-command idempotency is unchanged across attempts.
+
+Authorized text is retained only in `received`, `processing`, or `retryable`, for no more than 24 hours. It is cleared at every terminal or clarification state. Identifiers, text hashes, parser outcomes, attempt counts, safe error categories, and entity links remain for audit and correction.
 
 Financial mutation, command/entity linking, update finalization, pending confirmation, audit, input-version increment, recalculation record, and pg-boss enqueue share the financial command transaction. An already-matching cash count is a completed no-change command: it creates no canonical mutation, audit event, version increment, or recalculation.
 
-Replies are sent only after commit. Rate limits and server failures receive at most three delivery attempts. An indeterminate send outcome is recorded as `uncertain` and is not retried automatically, because duplicate Telegram delivery cannot be ruled out. Financial commands are never rerun to resend a reply.
+Replies are sent only after commit. Reply delivery has its own state machine: rate limits and server failures receive at most three delivery attempts. An indeterminate send outcome is recorded as `uncertain` and is not retried automatically, because duplicate Telegram delivery cannot be ruled out. Processing retry and delivery retry are independent; financial commands are never rerun to resend a reply.
 
 ## Clarification and correction
 
@@ -55,6 +61,6 @@ Corrections preserve history. An expense receives a linked refund and, unless ca
 
 ## Operations and privacy
 
-`/debug` shows whether Telegram is enabled, the last durable update and time, active clarification count, and safe recent update/delivery failures. It never displays raw Telegram text, message descriptions, token data, full API URLs, or Telegram identifiers.
+`/debug` shows whether Telegram is enabled, the last durable update and time, active clarification and retryable-update counts, and safe recent update/delivery failures with processing attempt metadata. It never displays raw Telegram text, message descriptions, token data, full API URLs, or Telegram identifiers.
 
 Shutdown aborts long polling, stops new claims, waits for the active loop and bounded database work, then permits the worker to stop pg-boss and PostgreSQL. Tests use fake Bot API boundaries and sanitized data only.

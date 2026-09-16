@@ -65,7 +65,7 @@ suite('PostgreSQL persistent financial pipeline', () => {
     const migrations = await context.pool.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(migrations.rows[0]?.count).toBe('7');
+    expect(migrations.rows[0]?.count).toBe('8');
   });
 
   it('round-trips bigint, UTC microseconds, and exact numeric strings', async () => {
