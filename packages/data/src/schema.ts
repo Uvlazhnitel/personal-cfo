@@ -272,6 +272,142 @@ export const factPayloads = pgTable(
   ],
 );
 
+export const accountBalanceSnapshots = pgTable(
+  'account_balance_snapshots',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    accountId: uuid('account_id').notNull(),
+    sourceAsOf: instant('source_as_of').notNull(),
+    receivedAt: instant('received_at').notNull(),
+    staleAt: instant('stale_at').notNull(),
+    reportabilityStatus: text('reportability_status').notNull(),
+    originalAmountMinor: money('original_amount_minor').notNull(),
+    originalCurrency: text('original_currency').notNull(),
+    reportingAmountMinor: money('reporting_amount_minor'),
+    reportingCurrency: text('reporting_currency'),
+    fxRateId: uuid('fx_rate_id'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.accountId, table.sourceAsOf] }),
+    index('balance_snapshots_owner_time_idx').on(table.ownerId, table.sourceAsOf),
+    check(
+      'balance_snapshot_reportability_ck',
+      sql`(${table.reportabilityStatus} = 'available' and ${table.reportingAmountMinor} is not null and ${table.reportingCurrency} is not null) or (${table.reportabilityStatus} = 'missing_fx' and ${table.reportingAmountMinor} is null and ${table.reportingCurrency} is null and ${table.fxRateId} is null)`,
+    ),
+  ],
+);
+
+export const portfolioValuations = pgTable(
+  'portfolio_valuations',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    accountId: uuid('account_id').notNull(),
+    sourceAsOf: instant('source_as_of').notNull(),
+    receivedAt: instant('received_at').notNull(),
+    staleAt: instant('stale_at').notNull(),
+    reportabilityStatus: text('reportability_status').notNull(),
+    originalAmountMinor: money('original_amount_minor').notNull(),
+    originalCurrency: text('original_currency').notNull(),
+    reportingAmountMinor: money('reporting_amount_minor'),
+    reportingCurrency: text('reporting_currency'),
+    fxRateId: uuid('fx_rate_id'),
+    brokerageCashTreatment: text('brokerage_cash_treatment').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.accountId, table.sourceAsOf] }),
+    index('portfolio_valuations_owner_time_idx').on(table.ownerId, table.sourceAsOf),
+    check(
+      'portfolio_valuation_reportability_ck',
+      sql`(${table.reportabilityStatus} = 'available' and ${table.reportingAmountMinor} is not null and ${table.reportingCurrency} is not null) or (${table.reportabilityStatus} = 'missing_fx' and ${table.reportingAmountMinor} is null and ${table.reportingCurrency} is null and ${table.fxRateId} is null)`,
+    ),
+    check(
+      'portfolio_valuation_cash_treatment_ck',
+      sql`${table.brokerageCashTreatment} in ('included_in_market_value','separate_account')`,
+    ),
+  ],
+);
+
+export const investmentContributions = pgTable(
+  'investment_contributions',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    transactionId: uuid('transaction_id').notNull(),
+    investmentAccountId: uuid('investment_account_id').notNull(),
+    principalMinor: money('principal_minor').notNull(),
+    currency: text('currency').notNull(),
+    effectiveAt: instant('effective_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.transactionId] }),
+    index('investment_contributions_owner_time_idx').on(table.ownerId, table.effectiveAt),
+    check('investment_contribution_positive_ck', sql`${table.principalMinor} > 0`),
+  ],
+);
+
+export const contributionAttributions = pgTable(
+  'contribution_attributions',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    transactionId: uuid('transaction_id').notNull(),
+    kind: text('kind').notNull(),
+    planId: uuid('plan_id'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.transactionId] }),
+    check(
+      'contribution_attribution_shape_ck',
+      sql`(${table.kind} = 'recurring_plan' and ${table.planId} is not null) or (${table.kind} = 'ad_hoc' and ${table.planId} is null)`,
+    ),
+  ],
+);
+
+export const primarySalaryTriggers = pgTable(
+  'primary_salary_triggers',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    transactionId: uuid('transaction_id').notNull(),
+    effectiveDate: date('effective_date', { mode: 'string' }).notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.transactionId] }),
+    index('primary_salary_triggers_owner_date_idx').on(table.ownerId, table.effectiveDate),
+  ],
+);
+
+export const spendingObservations = pgTable(
+  'spending_observations',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    economicFlowId: uuid('economic_flow_id').notNull(),
+    economicDate: date('economic_date', { mode: 'string' }).notNull(),
+    categoryId: uuid('category_id').notNull(),
+    necessity: text('necessity').notNull(),
+    cadence: text('cadence').notNull(),
+    irregular: boolean('irregular').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.economicFlowId] }),
+    index('spending_observations_owner_date_idx').on(table.ownerId, table.economicDate),
+    check(
+      'spending_observation_necessity_ck',
+      sql`${table.necessity} in ('essential','discretionary')`,
+    ),
+    check('spending_observation_cadence_ck', sql`${table.cadence} in ('recurring','variable')`),
+  ],
+);
+
 export const sinkingFunds = pgTable(
   'sinking_funds',
   {
@@ -432,6 +568,10 @@ export const recalculationRecords = pgTable(
       table.cause,
     ),
     index('recalculation_owner_time_idx').on(table.ownerId, table.createdAt),
+    check(
+      'recalculation_status_ck',
+      sql`${table.status} in ('queued','running','completed','failed','superseded')`,
+    ),
   ],
 );
 
@@ -466,6 +606,7 @@ export const engineRuns = pgTable(
       table.asOf,
     ),
     index('engine_run_latest_idx').on(table.ownerId, table.completedAt),
+    check('engine_run_status_ck', sql`${table.status} in ('running','completed','failed')`),
   ],
 );
 

@@ -8,7 +8,7 @@ import {
   executeFinancialCommand,
   resolveTransferCandidate,
 } from '@personal-cfo/data';
-import type { RecalculationCause } from '@personal-cfo/data';
+import type { EconomicFlowClassification, RecalculationCause } from '@personal-cfo/data';
 import type {
   CashReconciliation,
   CashReconciliationResolution,
@@ -41,6 +41,56 @@ function requiredString(value: unknown, name: string): string {
     throw new DataInvariantError('http.invalid_request', `${name} must be a non-empty string.`);
   }
   return value;
+}
+
+function requireOnlyKeys(value: Record<string, unknown>, allowed: readonly string[]): void {
+  const unexpected = Object.keys(value).filter((key) => !allowed.includes(key));
+  if (unexpected.length > 0)
+    throw new DataInvariantError(
+      'classification.identity_field_forbidden',
+      `Classification contains unsupported fields: ${unexpected.sort().join(', ')}.`,
+    );
+}
+
+export function parseClassificationInput(value: unknown): EconomicFlowClassification {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', 'classification must be an object.');
+  switch (value['kind']) {
+    case 'earned_income':
+      requireOnlyKeys(value, ['kind', 'earnedIncomeSource']);
+      return Object.freeze({
+        kind: value['kind'],
+        earnedIncomeSource: requiredString(
+          value['earnedIncomeSource'],
+          'classification.earnedIncomeSource',
+        ) as never,
+      });
+    case 'consumption':
+      requireOnlyKeys(value, ['kind', 'reimbursable']);
+      if (typeof value['reimbursable'] !== 'boolean')
+        throw new DataInvariantError(
+          'http.invalid_request',
+          'classification.reimbursable must be a boolean.',
+        );
+      return Object.freeze({ kind: value['kind'], reimbursable: value['reimbursable'] });
+    case 'refund':
+    case 'reimbursement': {
+      requireOnlyKeys(value, ['kind', 'relatedTransactionId']);
+      const related = value['relatedTransactionId'];
+      if (related !== null && typeof related !== 'string')
+        throw new DataInvariantError(
+          'http.invalid_request',
+          'classification.relatedTransactionId must be a string or null.',
+        );
+      return Object.freeze({ kind: value['kind'], relatedTransactionId: related });
+    }
+    case 'cash_reconciliation_adjustment':
+    case 'other_external_flow':
+      requireOnlyKeys(value, ['kind']);
+      return Object.freeze({ kind: value['kind'] });
+    default:
+      throw new DataInvariantError('http.invalid_request', 'classification.kind is invalid.');
+  }
 }
 
 function reviveMoney(value: unknown): unknown {
@@ -104,16 +154,15 @@ export async function POST(
       throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
     const clock = new Date();
     const now = clock.toISOString();
+    const boss = await webJobBoss();
     const result = await executeFinancialCommand(
       databaseContext().db,
-      webJobBoss(),
+      boss,
       {
         ownerId: session.ownerId,
         kind: commandCause(command),
         idempotencyKey,
         request: raw,
-        earliestAffectedAt:
-          typeof raw['earliestAffectedAt'] === 'string' ? raw['earliestAffectedAt'] : now,
         asOf: now,
         effectiveDate: localDateInRiga(clock),
         now,
@@ -124,7 +173,8 @@ export async function POST(
             return appendClassificationCorrection(
               tx,
               session.ownerId,
-              raw['flow'] as EconomicFlow,
+              requiredString(raw['flowId'], 'flowId'),
+              parseClassificationInput(raw['classification']),
               now,
               requiredString(raw['reason'], 'reason'),
             );

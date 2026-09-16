@@ -1,4 +1,4 @@
-import { and, desc, eq, sql } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import type { Database } from './database.js';
 import { normalizeSnapshotJson } from './json-codec.js';
@@ -6,10 +6,12 @@ import {
   derivedPayCycles,
   engineRuns,
   metricSnapshots,
+  ownerInputVersions,
   recalculationRecords,
   sinkingRequirements,
 } from './schema.js';
 import { generateUuidV7 } from './uuid-v7.js';
+import { lockOwnerFinancialState } from './owner-lock.js';
 
 export type EngineRunEnvelope = Readonly<{
   ownerId: string;
@@ -24,6 +26,23 @@ export type EngineRunEnvelope = Readonly<{
   startedAt: string;
   completedAt: string;
 }>;
+
+export type EnginePublicationResult =
+  | Readonly<{ status: 'published'; runId: string; reused: boolean }>
+  | Readonly<{
+      status: 'superseded';
+      requestedInputVersion: bigint;
+      currentInputVersion: bigint;
+    }>;
+
+export const RECALCULATION_STATUSES = [
+  'queued',
+  'running',
+  'completed',
+  'failed',
+  'superseded',
+] as const;
+export type RecalculationStatus = (typeof RECALCULATION_STATUSES)[number];
 
 const metricNames = [
   'netWorth',
@@ -43,9 +62,20 @@ export async function persistEngineResult(
   db: Database,
   envelope: EngineRunEnvelope,
   result: Readonly<Record<string, unknown>>,
-): Promise<Readonly<{ runId: string; reused: boolean }>> {
+): Promise<EnginePublicationResult> {
   return db.transaction(async (tx) => {
-    await tx.execute(sql`select pg_advisory_xact_lock(hashtextextended(${envelope.ownerId}, 0))`);
+    await lockOwnerFinancialState(tx, envelope.ownerId);
+    const ownerVersion = await tx.query.ownerInputVersions.findFirst({
+      where: eq(ownerInputVersions.ownerId, envelope.ownerId),
+    });
+    if (ownerVersion === undefined) throw new Error('Owner input version is missing.');
+    if (ownerVersion.version !== envelope.inputVersion) {
+      return Object.freeze({
+        status: 'superseded' as const,
+        requestedInputVersion: envelope.inputVersion,
+        currentInputVersion: ownerVersion.version,
+      });
+    }
     const existing = await tx.query.engineRuns.findFirst({
       where: and(
         eq(engineRuns.ownerId, envelope.ownerId),
@@ -56,7 +86,7 @@ export async function persistEngineResult(
       ),
     });
     if (existing?.status === 'completed')
-      return Object.freeze({ runId: existing.id, reused: true });
+      return Object.freeze({ status: 'published' as const, runId: existing.id, reused: true });
     const runId = existing?.id ?? generateUuidV7('engine-run');
     if (existing === undefined) {
       await tx.insert(engineRuns).values({
@@ -219,7 +249,7 @@ export async function persistEngineResult(
         resultPayload: normalizeSnapshotJson(result),
       })
       .where(eq(engineRuns.id, runId));
-    return Object.freeze({ runId, reused: false });
+    return Object.freeze({ status: 'published' as const, runId, reused: false });
   });
 }
 
@@ -242,7 +272,7 @@ export async function recentRecalculations(db: Database, ownerId: string, limit 
 export async function updateRecalculationStatus(
   db: Database,
   requestId: string,
-  status: 'running' | 'completed' | 'failed',
+  status: RecalculationStatus,
   completedAt: string | null,
   failure?: Readonly<{ category: string; message: string }>,
 ): Promise<void> {

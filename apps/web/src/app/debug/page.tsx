@@ -1,9 +1,10 @@
-import { findSession, loadDebugOverview, stringifySnapshot } from '@personal-cfo/data';
+import { stringifySnapshot } from '@personal-cfo/data';
 import { cookies } from 'next/headers.js';
 import { redirect } from 'next/navigation.js';
 
 import { SESSION_COOKIE } from '../../server/auth.js';
 import { databaseContext } from '../../server/database.js';
+import { loadAuthorizedDebugOverview } from '../../server/debug-access.js';
 
 function Section({ title, value }: Readonly<{ title: string; value: unknown }>) {
   return (
@@ -16,13 +17,14 @@ function Section({ title, value }: Readonly<{ title: string; value: unknown }>) 
 
 export default async function DebugPage() {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  const session = token === undefined ? null : await findSession(databaseContext().db, token);
-  if (session === null) redirect('/login');
-  const overview = await loadDebugOverview(databaseContext().db, session.ownerId);
+  const access = await loadAuthorizedDebugOverview(databaseContext().db, token);
+  if (access.status === 'unauthorized') redirect('/login');
+  const overview = access.overview;
   return (
     <main>
       <h1>Internal financial state</h1>
       <p>Persisted deterministic outputs only. No formulas run in this view.</p>
+      <Section title="Current input version" value={overview.currentInputVersion} />
       <Section title="Latest engine run" value={overview.latestRun} />
       <Section title="Canonical entity counts" value={overview.entityCounts} />
       <Section title="Metric snapshots" value={overview.metrics} />

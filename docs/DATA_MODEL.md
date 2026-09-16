@@ -160,6 +160,10 @@ Snapshots are derived caches, not primary financial facts. They may be rebuilt f
 
 Stage 5 stores canonical identities separately from append-only revisions. `financial_transactions` owns stable identity; `transaction_versions` and revision-scoped `account_entries` retain corrections. `flow_classifications` likewise appends a new revision and marks the prior projection non-current. Owner ID participates in composite foreign keys, preventing a user-owned child from referencing another owner's account, transaction, flow, fund, reconciliation, or engine run.
 
+Classification revisions store only the economic meaning specific to their kind. Flow ID, transaction ID, effective instant, amount, and currency always come from `economic_flows` and cannot be changed by classification correction.
+
+Account balance snapshots, portfolio valuations, investment contributions and their recurring/ad-hoc attribution, primary-salary triggers, and spending observations use dedicated relational tables. Exact original/reporting amounts, FX availability, source/staleness times, contribution principal, and classification fields are queryable and constrained; generic JSON payloads are not authoritative for these facts.
+
 An owner-scoped monotonic `BIGINT` input version advances in the same transaction as a financial command. Runtime watermarks are `owner:<uuid>:v<version>`. The initial development synthetic import preserves its checked-in fixture watermark at version 1 solely so the Stage 4 serialized golden can be compared byte-for-byte; the database version remains authoritative and every subsequent command uses the owner/version watermark.
 
 Engine results are normalized JSONB caches with sorted keys and decimal-string bigint values. Per-metric rows, Pay Cycles, Net Worth detail, and Sinking requirements remain queryable projections. Recalculation marks prior metric/requirement rows non-authoritative, inserts replacements, and links prior rows through `superseded_by`; canonical facts are never superseded by editing snapshot JSON.

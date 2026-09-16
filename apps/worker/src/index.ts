@@ -1,22 +1,13 @@
 import {
   JOB_QUEUES,
-  appendManualSinkingAllocation,
   createDatabaseContext,
   createJobBoss,
   DataInvariantError,
-  executeFinancialCommand,
-  generateUuidV7,
   requireDatabaseUrl,
   updateRecalculationStatus,
 } from '@personal-cfo/data';
 import type { RecalculationJob, SinkingAllocationJob } from '@personal-cfo/data';
-import { createSinkingFundAllocation } from '@personal-cfo/domain';
-import {
-  calculateAutomaticSinkingAllocations,
-  evaluateFinancialState,
-} from '@personal-cfo/financial-engine';
-
-import { assembleFinancialEngineInput } from './engine-input.js';
+import { processAutomaticSinkingAllocationJob } from './job-handlers.js';
 import { recalculateFinancialState } from './recalculation.js';
 
 const database = createDatabaseContext(requireDatabaseUrl(), { maxConnections: 8 });
@@ -33,19 +24,27 @@ await boss.work<RecalculationJob>(JOB_QUEUES.recalculate, { batchSize: 1 }, asyn
     log('financial.recalculation.started', { jobId: job.id, ownerId: job.data.ownerId });
     try {
       const result = await recalculateFinancialState(database.db, job.data);
-      log('financial.recalculation.completed', {
-        jobId: job.id,
-        runId: result.runId,
-        reused: result.reused,
-      });
+      if (result.status === 'superseded') {
+        log('financial.recalculation.superseded', {
+          jobId: job.id,
+          requestedInputVersion: result.requestedInputVersion.toString(),
+          currentInputVersion: result.currentInputVersion.toString(),
+        });
+      } else {
+        log('financial.recalculation.completed', {
+          jobId: job.id,
+          runId: result.runId,
+          reused: result.reused,
+        });
+      }
     } catch (error) {
       const permanent = error instanceof DataInvariantError;
       const message = error instanceof Error ? error.message : 'Unknown recalculation failure.';
       await updateRecalculationStatus(
         database.db,
         job.data.requestId,
-        'failed',
-        new Date().toISOString(),
+        permanent ? 'failed' : 'queued',
+        permanent ? new Date().toISOString() : null,
         { category: permanent ? 'permanent_input' : 'transient_runtime', message },
       );
       if (!permanent) throw error;
@@ -64,50 +63,7 @@ await boss.work<SinkingAllocationJob>(
   { batchSize: 1 },
   async (jobs) => {
     for (const job of jobs) {
-      const input = await assembleFinancialEngineInput(database.db, job.data.ownerId);
-      const state = evaluateFinancialState(input);
-      const plan = calculateAutomaticSinkingAllocations({
-        funds: input.canonical.sinkingFunds,
-        sinkingProtection: state.currentCycleSinkingDue,
-        liquidity: state.liquidityReserve,
-      });
-      if (plan.value === null || plan.value.allocations.length === 0) continue;
-      await executeFinancialCommand(
-        database.db,
-        boss,
-        {
-          ownerId: job.data.ownerId,
-          kind: 'automatic_sinking_allocation',
-          idempotencyKey: `auto:${job.data.salaryTransactionId}`,
-          request: {
-            salaryTransactionId: job.data.salaryTransactionId,
-            inputVersion: job.data.inputVersion,
-          },
-          earliestAffectedAt: job.data.asOf,
-          asOf: job.data.asOf,
-          effectiveDate: input.run.effectiveDate,
-          now: new Date().toISOString(),
-        },
-        async (tx, commandId) => {
-          const ids: string[] = [];
-          for (const allocation of plan.value!.allocations) {
-            const event = createSinkingFundAllocation({
-              id: generateUuidV7('sinking-fund-allocation'),
-              fundId: allocation.fundId,
-              kind: 'allocation',
-              amount: allocation.amount,
-              effectiveAt: job.data.asOf as never,
-            });
-            await appendManualSinkingAllocation(tx, job.data.ownerId, event, commandId);
-            ids.push(event.id);
-          }
-          return Object.freeze({
-            entityType: 'automatic_sinking_allocation',
-            entityId: job.data.salaryTransactionId,
-            result: Object.freeze({ allocationIds: Object.freeze(ids) }),
-          });
-        },
-      );
+      await processAutomaticSinkingAllocationJob(database.db, boss, job.data);
     }
   },
 );

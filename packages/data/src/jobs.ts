@@ -38,6 +38,7 @@ export type SinkingAllocationJob = Readonly<{
   salaryTransactionId: string;
   inputVersion: string;
   asOf: string;
+  effectiveDate: string;
 }>;
 
 type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];

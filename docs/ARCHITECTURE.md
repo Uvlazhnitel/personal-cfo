@@ -106,6 +106,8 @@ The worker uses pg-boss in the application PostgreSQL database. Jobs include:
 
 Jobs carry entity IDs, input versions, cause/cutoff, and correlation metadata—not secrets or full financial payloads. Financial recalculation and Sinking allocation use PostgreSQL-backed pg-boss queues. Transient failures receive three attempts with five-second exponential backoff; permanent canonical-input failures are recorded and routed directly to bounded dead-letter metadata. Scheduled jobs use Europe/Riga calendar boundaries; stored execution times are UTC. A unique owner/version or owner/salary key prevents duplicate schedules.
 
+A recalculation reads one repeatable-read database snapshot for its requested input version. Before publishing, it rechecks the owner version under the same advisory lock used by financial mutations. Obsolete jobs are marked `superseded`, are not retried, and cannot deactivate authoritative snapshots from a newer input version.
+
 ### PWA
 
 The PWA is a decision-oriented projection over API data. It displays Net Worth, CCR, liquidity, Safe to Invest, investments, Sinking Funds, forecasts, and actionable insights. It performs display formatting and temporary what-if input only. It does not reproduce financial formulas or cache sensitive data for offline mutation. Service-worker caching is limited to static application assets; authenticated financial responses are network-only.

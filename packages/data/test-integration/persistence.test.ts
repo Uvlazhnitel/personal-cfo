@@ -65,7 +65,7 @@ suite('PostgreSQL persistent financial pipeline', () => {
     const migrations = await context.pool.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(migrations.rows[0]?.count).toBe('5');
+    expect(migrations.rows[0]?.count).toBe('6');
   });
 
   it('round-trips bigint, UTC microseconds, and exact numeric strings', async () => {
@@ -117,6 +117,12 @@ suite('PostgreSQL persistent financial pipeline', () => {
       context.pool.query(
         "insert into cash_reconciliations (id, owner_id, account_id, adjustment_transaction_id, calculated_minor, counted_minor, variance_minor, currency, materiality, reconciled_at, payload) values ($1,$2,$3,$4,0,1,1,'EUR','material',now(),'{}')",
         [generateUuidV7('cash-reconciliation'), second, accountId, transactionId],
+      ),
+    ).rejects.toMatchObject({ code: '23503' });
+    await expect(
+      context.pool.query(
+        "insert into account_balance_snapshots (owner_id, account_id, source_as_of, received_at, stale_at, reportability_status, original_amount_minor, original_currency, reporting_amount_minor, reporting_currency, fx_rate_id) values ($1,$2,'2026-09-15T08:00:00Z','2026-09-15T08:00:00Z','2026-09-15T09:00:00Z','available',100,'EUR',100,'EUR',null)",
+        [second, accountId],
       ),
     ).rejects.toMatchObject({ code: '23503' });
   });
@@ -209,11 +215,19 @@ suite('PostgreSQL persistent financial pipeline', () => {
     );
     expect(first).toEqual({ changed: true, inputVersion: 1n });
     expect(second).toEqual({ changed: false, inputVersion: 1n });
-    const assembled = await assembleFinancialEngineInput(context.db, ownerId);
+    const assembled = await assembleFinancialEngineInput(context.db, {
+      ownerId,
+      expectedInputVersion: 1n,
+      asOf: scenario.run.asOf,
+      effectiveDate: scenario.run.effectiveDate,
+      cause: 'synthetic_import',
+    });
+    expect(assembled.status).toBe('ready');
+    if (assembled.status !== 'ready') throw new Error('Synthetic assembly was superseded.');
     expect((await loadCanonicalFacts(context.db, ownerId)).transactions).toHaveLength(
       scenario.canonical.transactions.length,
     );
-    const result = evaluateFinancialState(assembled);
+    const result = evaluateFinancialState(assembled.input);
     expect(result).toEqual(evaluateFinancialState(scenario));
     const golden = await readFile(
       resolve(process.cwd(), 'packages/financial-engine/test/golden/healthy-current.stage2g1.json'),
@@ -237,7 +251,8 @@ suite('PostgreSQL persistent financial pipeline', () => {
       },
       result,
     );
-    expect(persisted.reused).toBe(false);
+    expect(persisted).toMatchObject({ status: 'published', reused: false });
+    if (persisted.status !== 'published') throw new Error('Synthetic run was superseded.');
     expect(
       await context.db.query.engineRuns.findFirst({ where: eq(engineRuns.id, persisted.runId) }),
     ).toMatchObject({ status: 'completed', inputWatermark: scenario.run.inputWatermark });
@@ -260,7 +275,6 @@ suite('PostgreSQL persistent financial pipeline', () => {
             kind: 'manual_recalculate',
             idempotencyKey: 'stable-key-001',
             request,
-            earliestAffectedAt: null,
             asOf: '2026-09-15T08:00:00Z',
             effectiveDate: '2026-09-15',
             now: '2026-09-15T08:00:00Z',
@@ -269,6 +283,7 @@ suite('PostgreSQL persistent financial pipeline', () => {
             Promise.resolve({
               entityType: 'test',
               entityId: ownerId,
+              earliestAffectedAt: null,
               result: Object.freeze({ accepted: true }),
             }),
         );
@@ -315,7 +330,6 @@ suite('PostgreSQL persistent financial pipeline', () => {
             kind: 'classification_correction',
             idempotencyKey: 'concurrent-key-001',
             request: { value: 'same' },
-            earliestAffectedAt: null,
             asOf: '2026-09-15T08:00:00Z',
             effectiveDate: '2026-09-15',
             now: '2026-09-15T08:01:00Z',
@@ -325,6 +339,7 @@ suite('PostgreSQL persistent financial pipeline', () => {
             return Promise.resolve({
               entityType: 'test',
               entityId: ownerId,
+              earliestAffectedAt: null,
               result: Object.freeze({ accepted: true }),
             });
           },

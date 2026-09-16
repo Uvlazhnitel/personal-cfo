@@ -1,5 +1,5 @@
 import { findSession, verifyCsrf } from '@personal-cfo/data';
-import type { AuthenticatedSession } from '@personal-cfo/data';
+import type { AuthenticatedSession, Database } from '@personal-cfo/data';
 import type { NextRequest } from 'next/server.js';
 
 import { databaseContext } from './database.js';
@@ -38,17 +38,31 @@ export function authConfiguration(
 export async function authenticatedRequest(
   request: NextRequest,
 ): Promise<AuthenticatedSession | null> {
+  return authenticatedRequestWith(databaseContext().db, request);
+}
+
+export async function authenticatedRequestWith(
+  db: Database,
+  request: NextRequest,
+): Promise<AuthenticatedSession | null> {
   const token = request.cookies.get(SESSION_COOKIE)?.value;
-  return token === undefined ? null : findSession(databaseContext().db, token);
+  return token === undefined ? null : findSession(db, token);
 }
 
 export async function authorizedCommand(
   request: NextRequest,
 ): Promise<AuthenticatedSession | null> {
-  const session = await authenticatedRequest(request);
+  return authorizedCommandWith(databaseContext().db, request, authConfiguration().appOrigin);
+}
+
+export async function authorizedCommandWith(
+  db: Database,
+  request: NextRequest,
+  appOrigin: string,
+): Promise<AuthenticatedSession | null> {
+  const session = await authenticatedRequestWith(db, request);
   if (session === null) return null;
-  const config = authConfiguration();
-  if (request.headers.get('origin') !== config.appOrigin) return null;
+  if (request.headers.get('origin') !== appOrigin) return null;
   const header = request.headers.get('x-csrf-token');
   const cookie = request.cookies.get(CSRF_COOKIE)?.value;
   if (header === null || cookie === undefined || header !== cookie || !verifyCsrf(session, header))

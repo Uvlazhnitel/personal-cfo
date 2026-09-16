@@ -8,6 +8,7 @@ export * from './financial-facts.js';
 export * from './json-codec.js';
 export * from './jobs.js';
 export * from './migrations.js';
+export * from './owner-lock.js';
 export * from './owners.js';
 export * from './schema.js';
 export * from './uuid-v7.js';

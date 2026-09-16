@@ -332,6 +332,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Production must terminate HTTPS and retain Secure, HttpOnly, SameSite=Lax cookies. Application login throttling ships now; Caddy edge throttling remains deployment configuration because the stock image has no rate-limit module.
 
+## ADR-029 — Recalculation Publication Consistency
+
+**Status:** Accepted — 2026-09-16
+
+**Decision:** A queued recalculation may publish authoritative derived state only when its input version equals the owner's current input version both during repeatable-read assembly and inside the publication transaction. Financial mutations and publication share one owner advisory lock. A mismatch marks the recalculation `superseded`; it creates no engine run, receives no retry, and changes no authoritative snapshot.
+
+**Reasoning:** A preflight check alone cannot prevent a command from committing while a calculation is running. Without the transactional publication guard, an older result can overwrite newer authoritative state or label newer facts with an older version.
+
+**Alternatives:** Reconstructing historical database state for every obsolete job adds event-sourcing complexity rejected for V1. Ordering jobs in one worker does not protect multiple processes or delayed retries.
+
+**Consequences:** Job `asOf` and Europe/Riga effective date own the run boundary. Initial synthetic version 1 may retain its fixture watermark; all later runs use the durable owner/version watermark. Recalculation records expose obsolete work explicitly while current authority remains monotonic.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

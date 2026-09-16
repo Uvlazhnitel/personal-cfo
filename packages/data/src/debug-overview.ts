@@ -9,11 +9,13 @@ import {
   engineRuns,
   flowAmbiguities,
   metricSnapshots,
+  ownerInputVersions,
   recalculationRecords,
   sinkingRequirements,
 } from './schema.js';
 
 export type DebugOverview = Readonly<{
+  currentInputVersion: string | null;
   latestRun: unknown;
   entityCounts: Readonly<Record<string, string>>;
   metrics: readonly unknown[];
@@ -28,6 +30,9 @@ export type DebugOverview = Readonly<{
 }>;
 
 export async function loadDebugOverview(db: Database, ownerId: string): Promise<DebugOverview> {
+  const ownerVersion = await db.query.ownerInputVersions.findFirst({
+    where: eq(ownerInputVersions.ownerId, ownerId),
+  });
   const latestRun = await db.query.engineRuns.findFirst({
     where: and(eq(engineRuns.ownerId, ownerId), eq(engineRuns.status, 'completed')),
     orderBy: [desc(engineRuns.completedAt)],
@@ -100,6 +105,7 @@ export async function loadDebugOverview(db: Database, ownerId: string): Promise<
     Object.fromEntries(Object.entries(rawCounts).map(([key, value]) => [key, String(value)])),
   );
   return Object.freeze({
+    currentInputVersion: ownerVersion?.version.toString() ?? null,
     latestRun: latestRun ?? null,
     entityCounts,
     metrics: Object.freeze(metrics),

@@ -23,6 +23,13 @@ import { decodeSourceJson, encodeSourceJson, normalizeSnapshotJson } from './jso
 import { enqueueRecalculation } from './jobs.js';
 import type { RecalculationCause } from './jobs.js';
 import {
+  canonicalDatabaseInstant,
+  classificationFromEconomicFlow,
+  encodeEconomicFlowClassification,
+} from './financial-facts.js';
+import type { EconomicFlowClassification } from './financial-facts.js';
+import { lockOwnerFinancialState } from './owner-lock.js';
+import {
   auditEvents,
   accountEntries,
   cashReconciliations,
@@ -44,6 +51,7 @@ type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0]
 export type CommandMutationResult = Readonly<{
   entityType: string;
   entityId: string;
+  earliestAffectedAt: string | null;
   result: Readonly<Record<string, unknown>>;
 }>;
 
@@ -52,7 +60,6 @@ export type FinancialCommandInput = Readonly<{
   kind: RecalculationCause;
   idempotencyKey: string;
   request: unknown;
-  earliestAffectedAt: string | null;
   asOf: string;
   effectiveDate: string;
   now: string;
@@ -84,6 +91,7 @@ export async function executeFinancialCommand(
     );
   const hash = requestHash(input.request);
   return db.transaction(async (tx) => {
+    await lockOwnerFinancialState(tx, input.ownerId);
     const commandId = generateUuidV7('command');
     const inserted = await tx
       .insert(commandRecords)
@@ -120,19 +128,18 @@ export async function executeFinancialCommand(
         );
       if (existing.status !== 'completed' || existing.result === null)
         throw new DataConflictError('command.in_progress', 'The command is not complete.');
-      const version = await tx.query.ownerInputVersions.findFirst({
-        where: eq(ownerInputVersions.ownerId, input.ownerId),
-      });
-      if (version === undefined)
+      const storedResult = decodeSourceJson(existing.result) as Readonly<Record<string, unknown>>;
+      const storedVersion = storedResult['inputVersion'];
+      if (typeof storedVersion !== 'string' || !/^[1-9][0-9]*$/u.test(storedVersion))
         throw new DataInvariantError(
-          'command.missing_owner_version',
-          'Owner input version is missing.',
+          'command.invalid_stored_result',
+          'Completed command result does not contain its input version.',
         );
       return Object.freeze({
         commandId: existing.id,
         replayed: true,
-        inputVersion: version.version,
-        result: decodeSourceJson(existing.result) as Readonly<Record<string, unknown>>,
+        inputVersion: BigInt(storedVersion),
+        result: storedResult,
       });
     }
     try {
@@ -156,14 +163,14 @@ export async function executeFinancialCommand(
         cause: input.kind,
         asOf: input.asOf,
         effectiveDate: input.effectiveDate,
-        earliestAffectedAt: input.earliestAffectedAt,
+        earliestAffectedAt: mutation.earliestAffectedAt,
       });
       await tx.insert(recalculationRecords).values({
         id: requestId,
         ownerId: input.ownerId,
         inputVersion: version,
         cause: input.kind,
-        earliestAffectedAt: input.earliestAffectedAt,
+        earliestAffectedAt: mutation.earliestAffectedAt,
         status: 'queued',
         jobId,
         createdAt: input.now,
@@ -178,7 +185,11 @@ export async function executeFinancialCommand(
         eventKind: input.kind,
         entityType: mutation.entityType,
         entityId: mutation.entityId,
-        metadata: normalizeSnapshotJson({ inputVersion: version, jobId }),
+        metadata: normalizeSnapshotJson({
+          inputVersion: version,
+          jobId,
+          earliestAffectedAt: mutation.earliestAffectedAt,
+        }),
         occurredAt: input.now,
       });
       const result = Object.freeze({
@@ -208,15 +219,42 @@ export async function executeFinancialCommand(
 export async function appendClassificationCorrection(
   tx: DatabaseTransaction,
   ownerId: string,
-  flow: EconomicFlow,
+  flowId: string,
+  classification: EconomicFlowClassification,
   now: string,
   reason: string,
 ): Promise<CommandMutationResult> {
-  const validated = createEconomicFlow(flow);
+  const base = await tx.query.economicFlows.findFirst({
+    where: and(eq(economicFlows.ownerId, ownerId), eq(economicFlows.id, flowId)),
+  });
+  if (base === undefined)
+    throw new DataInvariantError(
+      'classification.flow_not_found',
+      'The economic flow does not exist.',
+    );
+  const common = {
+    id: base.id as never,
+    transactionId: base.transactionId as never,
+    effectiveAt: canonicalDatabaseInstant(base.effectiveAt) as never,
+    amount: { amountMinor: base.amountMinor, currency: base.currency as never },
+  };
+  const validated = createEconomicFlow(
+    classification.kind === 'earned_income'
+      ? { ...common, kind: classification.kind, source: classification.earnedIncomeSource }
+      : classification.kind === 'consumption'
+        ? { ...common, kind: classification.kind, reimbursable: classification.reimbursable }
+        : classification.kind === 'refund' || classification.kind === 'reimbursement'
+          ? {
+              ...common,
+              kind: classification.kind,
+              relatedTransactionId: classification.relatedTransactionId as never,
+            }
+          : { ...common, kind: classification.kind },
+  );
   const current = await tx.query.flowClassifications.findFirst({
     where: and(
       eq(flowClassifications.ownerId, ownerId),
-      eq(flowClassifications.flowId, validated.id),
+      eq(flowClassifications.flowId, base.id),
       eq(flowClassifications.isCurrent, true),
     ),
   });
@@ -231,25 +269,26 @@ export async function appendClassificationCorrection(
     .where(
       and(
         eq(flowClassifications.ownerId, ownerId),
-        eq(flowClassifications.flowId, validated.id),
+        eq(flowClassifications.flowId, base.id),
         eq(flowClassifications.isCurrent, true),
       ),
     );
   await tx.insert(flowClassifications).values({
     ownerId,
-    flowId: validated.id,
+    flowId: base.id,
     revision: current.revision + 1,
     kind: validated.kind,
     source: 'user',
     reason,
-    payload: encodeSourceJson(validated),
+    payload: encodeEconomicFlowClassification(classification),
     decidedAt: now,
     isCurrent: true,
   });
   return Object.freeze({
     entityType: 'economic_flow',
-    entityId: validated.id,
-    result: Object.freeze({ flowId: validated.id, revision: current.revision + 1 }),
+    entityId: base.id,
+    earliestAffectedAt: canonicalDatabaseInstant(base.effectiveAt),
+    result: Object.freeze({ flowId: base.id, revision: current.revision + 1 }),
   });
 }
 
@@ -352,6 +391,13 @@ export async function resolveTransferCandidate(
   return Object.freeze({
     entityType: 'transfer_candidate',
     entityId: candidateId,
+    earliestAffectedAt:
+      replacementTransaction === undefined
+        ? canonicalDatabaseInstant(candidate.effectiveAt)
+        : [
+            canonicalDatabaseInstant(candidate.effectiveAt),
+            replacementTransaction.effectiveAt,
+          ].sort()[0]!,
     result: Object.freeze({ candidateId, resolution }),
   });
 }
@@ -428,7 +474,7 @@ export async function appendCashReconciliation(
     kind: canonicalFlow.kind,
     source: 'user',
     reason: canonicalReconciliation.reason,
-    payload: encodeSourceJson(canonicalFlow),
+    payload: encodeEconomicFlowClassification(classificationFromEconomicFlow(canonicalFlow)),
     decidedAt: canonicalReconciliation.reconciledAt,
     isCurrent: true,
   });
@@ -448,6 +494,7 @@ export async function appendCashReconciliation(
   return Object.freeze({
     entityType: 'cash_reconciliation',
     entityId: canonicalReconciliation.id,
+    earliestAffectedAt: canonicalReconciliation.reconciledAt,
     result: Object.freeze({
       reconciliationId: canonicalReconciliation.id,
       adjustmentTransactionId: canonicalTransaction.id,
@@ -482,6 +529,7 @@ export async function appendManualSinkingAllocation(
   return Object.freeze({
     entityType: 'sinking_allocation',
     entityId: value.id,
+    earliestAffectedAt: value.effectiveAt,
     result: Object.freeze({ allocationId: value.id, fundId: value.fundId }),
   });
 }
@@ -571,6 +619,7 @@ export async function appendReconciliationResolution(
   return Object.freeze({
     entityType: 'cash_reconciliation_resolution',
     entityId: value.reconciliationId,
+    earliestAffectedAt: value.resolvedAt,
     result: Object.freeze({ reconciliationId: value.reconciliationId, kind: value.kind }),
   });
 }

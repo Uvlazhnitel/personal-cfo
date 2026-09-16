@@ -24,6 +24,11 @@ try {
     effectiveDate: scenario.run.effectiveDate,
     earliestAffectedAt: null,
   });
+  if (recalculated.status !== 'published') {
+    throw new Error(
+      `Synthetic recalculation was superseded by input version ${recalculated.currentInputVersion.toString()}.`,
+    );
+  }
   console.info(
     JSON.stringify({
       event: 'synthetic.imported',

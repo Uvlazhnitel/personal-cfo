@@ -6,17 +6,27 @@ Stage 5 implements the first durable path from canonical PostgreSQL facts throug
 
 Migrations in `packages/data/migrations/` are reviewed and sequential: identity/authentication, canonical finance, planning/reconciliation, derived engine state, then the pinned pg-boss schema and queues. Generate schema changes with `pnpm db:generate`, inspect SQL, validate with `pnpm db:check`, and apply once with `pnpm db:migrate`. Web and worker never migrate at startup. Reapplying all committed migrations is safe.
 
+## Canonical Relational Authority
+
+Account balance snapshots, portfolio valuations, investment contributions and attribution, primary-salary triggers, and spending observations have dedicated relational tables. Their owner-scoped foreign keys, exact monetary columns, timestamps, classifications, and status constraints are authoritative. `fact_payloads` cannot contain these fact types and is reserved for non-authoritative bounded metadata.
+
+Economic identity is stored in `economic_flows`. Classification revisions contain only classification meaning; loaders combine the immutable base identity with the active classification. A classification correction cannot change transaction identity, effective time, amount, or currency.
+
 ## Durable Calculation Flow
 
 Repositories reconstruct domain objects from relational current projections and append-only history. A financial command locks its unique `(owner, kind, Idempotency-Key)`, hashes normalized request content, writes the mutation and audit record, increments the owner input version, and sends a pg-boss job through the same Drizzle transaction. Equal retries replay the stored result; a different payload returns conflict.
 
-The worker obtains an owner advisory lock and stores one engine run per version/envelope. Successful runs atomically persist the normalized full result, metric snapshots, Pay Cycles, and fund requirements. Prior derived rows remain queryable but become non-authoritative and link to their replacement.
+Commands derive `earliestAffectedAt` from the mutated canonical fact; HTTP clients never choose this provenance boundary. Classification starts at the flow instant, transfer resolution at the earliest candidate/transaction instant, reconciliation creation at `reconciledAt`, resolution at `resolvedAt`, and Sinking allocation at its effective instant.
+
+The worker assembles one repeatable-read input snapshot for the job's explicit input version, `asOf`, and Europe/Riga effective date. A mismatched queued version becomes `superseded` without evaluation or retry. At publication, the repository takes the same owner advisory lock used by mutations and re-reads `owner_input_versions`. Only an equal version may publish. A command that commits during evaluation therefore prevents the older result from deactivating newer authoritative rows.
+
+Successful runs atomically persist the normalized full result, metric snapshots, Pay Cycles, and fund requirements. Prior derived rows remain queryable but become non-authoritative and link to their replacement. Initial synthetic version 1 alone may retain its checked-in watermark; later runs use `owner:<owner>:v<version>`.
 
 ## Authentication and Commands
 
 Create the local user with `pnpm admin:create-user -- <login>`; the password is read twice without echo. Login names are canonical lowercase. Login rotates active sessions. Browser commands under `/api/v1/commands/<kind>` require the session cookie, exact Origin, matching session-bound CSRF token, and an `Idempotency-Key` header.
 
-Supported command kinds are `classification-correction`, `transfer-resolution`, `sinking-allocation`, `cash-reconciliation`, and `cash-reconciliation-resolution`. Reconciliation resolution is verified as either same-adjustment reclassification or an exact booked reversal on the reconciled account.
+Supported command kinds are `classification-correction`, `transfer-resolution`, `sinking-allocation`, `cash-reconciliation`, and `cash-reconciliation-resolution`. Reconciliation resolution is verified as either same-adjustment reclassification or an exact booked reversal on the reconciled account. pg-boss is explicitly started once in both web and worker processes; transactional enqueue fails closed if queue startup or readiness fails. Jobs survive process restart, while command and salary idempotency keys prevent duplicate mutations.
 
 ## Development and Recovery
 

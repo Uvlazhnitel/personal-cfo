@@ -7,11 +7,36 @@ import { assembleFinancialEngineInput } from './engine-input.js';
 export async function recalculateFinancialState(
   db: Database,
   job: RecalculationJob,
-): Promise<Readonly<{ runId: string; reused: boolean }>> {
+  clock: Readonly<{ now: () => string }> = { now: () => new Date().toISOString() },
+): Promise<
+  | Readonly<{ status: 'published'; runId: string; reused: boolean }>
+  | Readonly<{
+      status: 'superseded';
+      requestedInputVersion: bigint;
+      currentInputVersion: bigint;
+    }>
+> {
   await updateRecalculationStatus(db, job.requestId, 'running', null);
-  const input = await assembleFinancialEngineInput(db, job.ownerId);
+  const startedAt = clock.now();
+  const assembled = await assembleFinancialEngineInput(db, {
+    ownerId: job.ownerId,
+    expectedInputVersion: BigInt(job.inputVersion),
+    asOf: job.asOf,
+    effectiveDate: job.effectiveDate,
+    cause: job.cause,
+  });
+  if (assembled.status === 'superseded') {
+    const completedAt = clock.now();
+    await updateRecalculationStatus(db, job.requestId, 'superseded', completedAt);
+    return Object.freeze({
+      status: assembled.status,
+      requestedInputVersion: assembled.expectedInputVersion,
+      currentInputVersion: assembled.loadedInputVersion,
+    });
+  }
+  const input = assembled.input;
   const result = evaluateFinancialState(input);
-  const completedAt = new Date().toISOString();
+  const completedAt = clock.now();
   const persisted = await persistEngineResult(
     db,
     {
@@ -24,11 +49,19 @@ export async function recalculateFinancialState(
       inputWatermark: input.run.inputWatermark,
       trigger: job.cause,
       earliestAffectedAt: job.earliestAffectedAt,
-      startedAt: completedAt,
+      startedAt,
       completedAt,
     },
     result,
   );
+  if (persisted.status === 'superseded') {
+    await updateRecalculationStatus(db, job.requestId, 'superseded', completedAt);
+    return persisted;
+  }
   await updateRecalculationStatus(db, job.requestId, 'completed', completedAt);
-  return persisted;
+  return Object.freeze({
+    status: persisted.status,
+    runId: persisted.runId,
+    reused: persisted.reused,
+  });
 }

@@ -2,6 +2,7 @@ import { jobInfrastructureReady } from '@personal-cfo/data';
 import { NextResponse } from 'next/server.js';
 
 import { databaseContext } from '../../../../server/database.js';
+import { webJobBoss } from '../../../../server/jobs.js';
 
 export async function GET(): Promise<NextResponse> {
   let database: 'ok' | 'unavailable' = 'unavailable';
@@ -9,6 +10,7 @@ export async function GET(): Promise<NextResponse> {
   try {
     await databaseContext().pool.query('select 1');
     database = 'ok';
+    await webJobBoss();
     jobs = (await jobInfrastructureReady(databaseContext().db)) ? 'ok' : 'unavailable';
   } catch {
     // Readiness intentionally exposes only bounded status categories.
