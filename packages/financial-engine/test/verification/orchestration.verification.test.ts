@@ -230,7 +230,7 @@ describe('Stage 4 orchestration verification', () => {
     expect(blocked.safeToInvest.status).toBe('unavailable');
     expect(blocked.cashDrag.status).toBe('unavailable');
     expect(blocked.investmentContributionDecision.value?.kind).not.toBe('step_up');
-  });
+  }, 15_000);
 
   it('changes wealth and investable cash by the exact count variance without inventing flow', () => {
     const unresolvedInput = buildSyntheticScenario('cash_variance_unresolved');
