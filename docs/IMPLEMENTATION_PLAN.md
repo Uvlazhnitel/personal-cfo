@@ -128,9 +128,11 @@ Required reconciliation regressions are:
 
 ## Stage 7 — Portfolio Tracker Integration
 
+**Contract status:** Stage 7.0 resolved provider-neutral valuation, cash, holding, contribution, revision, cursor, freshness, and retention semantics in `PORTFOLIO_CONTRACT.md`. Live Stage 7 remains `BLOCKED_ON_PROVIDER_BINDING` until a concrete provider and verified API/auth mapping satisfy that contract.
+
 **Goal:** Import portfolio value, holdings summary, contribution evidence, and reconciliation data without double counting.
 
-**Dependencies:** Stage 5; portfolio contract and valuation semantics resolved.
+**Dependencies:** Stage 5; provider-neutral contract resolved; concrete portfolio provider binding selected and verified.
 
 **Tasks:** Implement capability discovery, encrypted connection configuration, raw receipt, normalization, cursoring, contribution matching, stale-state handling, and contract fixtures.
 

@@ -84,6 +84,8 @@ While unresolved, its entries remain in account balances but are excluded from a
 
 `SyncCursor` stores one cursor per connection, account, and object kind. `SyncRun` records its range, cursor before/after, counts, status, and error category. Advance a cursor only in the same database transaction that safely records the imported page.
 
+Portfolio cursors are opaque provider state and may be strings, page tokens, timestamp watermarks, or composite values. Portfolio raw payload ciphertext is bounded to 30 days; receipt metadata, hashes, normalization version, stable source/revision links, and canonical facts follow their ordinary audit retention. Disconnect removes usable credentials and stops synchronization without deleting historical canonical facts. Purge is a separate explicit operation.
+
 ### Identity Algorithm
 
 Deduplication is layered:
@@ -106,9 +108,11 @@ A transfer is one `FinancialTransaction` with linked source and destination entr
 
 ### Investment Contributions and Returns
 
-`InvestmentContribution` links a confirmed bank-to-brokerage transfer to principal amount and date. It is an allocation of existing capital, not consumption and not market return. `PortfolioSnapshot` stores total portfolio market value, contributed-capital total when supplied, cash component, holdings summary reference, source time, and completeness.
+`InvestmentContribution` links a confirmed bank-to-brokerage transfer to principal amount and date. It is an allocation of existing capital, not consumption and not market return. Provider contribution evidence remains `unmatched`, `candidate`, `confirmed`, or `rejected`; only a deterministic confirmed link with exact money and one canonical transfer creates principal. A withdrawal is an explicit direction, never a guessed negative contribution.
 
-Investment return for a period is derived from portfolio value changes adjusted for contributions, withdrawals, and FX. Provider-reported P/L is retained for reconciliation but does not override the engine without a documented semantic match. Brokerage cash is included either in the portfolio total or as a separate account balance, never both.
+`PortfolioSnapshot` identifies the canonical investment account, provider connection/account, stable source/revision, actual provider `sourceAsOf`, separate `receivedAt`, `staleAt`, exact provider-reported value, total economic value, optional contributed-capital aggregate, cash component, holdings detail/completeness, source completeness, and one Net Worth projection. `totalMarketValue` includes known brokerage cash. When cash is provider-excluded, normalization either aggregates it exactly or declares an exact investment-plus-separate-cash projection; when cash treatment is unknown, the total and projection are unavailable rather than zero.
+
+Holdings are components and reconciliation evidence, not independent accounts or an alternate wealth source. Investment return for a period is derived from portfolio value changes adjusted for confirmed contributions, explicit withdrawals, and FX. Provider-reported P/L and contributed-capital aggregates are retained for reconciliation but do not override canonical principal or the engine. Brokerage cash enters Net Worth through exactly one declared projection, never both the portfolio total and a separate account.
 
 ### Refunds and Reimbursements
 
