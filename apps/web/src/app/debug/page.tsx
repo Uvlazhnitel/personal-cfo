@@ -43,6 +43,7 @@ export default async function DebugPage() {
         value={{ audit: overview.audit, recalculations: overview.recalculations }}
       />
       <Section title="Durable jobs" value={overview.jobs} />
+      <Section title="Telegram integration" value={overview.telegram} />
     </main>
   );
 }

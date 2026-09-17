@@ -1,6 +1,6 @@
 # Persistence and Internal Debug Operations
 
-Stage 5 implements the first durable path from canonical PostgreSQL facts through `evaluateFinancialState()` to versioned snapshots and the authenticated `/debug` page. PostgreSQL remains internal to Compose; only Caddy binds `127.0.0.1:8080`.
+Stages 5–6 implement the durable path from canonical PostgreSQL facts through `evaluateFinancialState()` to versioned snapshots, the authenticated `/debug` page, and Telegram text ingestion. PostgreSQL remains internal to Compose; only Caddy binds `127.0.0.1:8080`.
 
 ## Migration Workflow
 
@@ -31,6 +31,14 @@ Cash-reconciliation verification follows the complete command-to-publication lif
 Create the local user with `pnpm admin:create-user -- <login>`; the password is read twice without echo. Login names are canonical lowercase. Login rotates active sessions. Browser commands under `/api/v1/commands/<kind>` require the session cookie, exact Origin, matching session-bound CSRF token, and an `Idempotency-Key` header.
 
 Supported command kinds are `classification-correction`, `transfer-resolution`, `sinking-allocation`, `cash-reconciliation`, and `cash-reconciliation-resolution`. Reconciliation resolution is verified as either same-adjustment reclassification or an exact booked reversal on the reconciled account. pg-boss is explicitly started once in both web and worker processes; transactional enqueue fails closed if queue startup or readiness fails. Jobs survive process restart, while command and salary idempotency keys prevent duplicate mutations.
+
+Telegram adds `cash_activity`, `sinking_fund_creation`, and `cash_correction` recalculation causes. A changed Telegram command retains the same atomic mutation/audit/version/recalculation/job contract. A zero-variance cash count returns `mutated: false` and completes without creating any of those economic effects.
+
+## Telegram Persistence
+
+Migration `0006` adds owner links, poll state, durable updates, bounded clarifications, delivery attempts, correction links, and integration status. Migration `0007` adds the explicit processing-retry deadline and state. Telegram numeric identifiers use PostgreSQL `BIGINT`. Update pages and monotonic offsets commit together; a higher offset is never used before the page is durable. Claims use `FOR UPDATE SKIP LOCKED`; five-minute leases recover crashes, while unexpected runtime failures receive at most three total processing attempts with persisted one-second and two-second backoff.
+
+Authorized raw text exists only while an update is received, processing, or retryable and expires after 24 hours. Clarification payloads contain structured known fields only and are cleared at terminal state. Pending reply text is cleared after success, terminal failure, uncertainty, or retention expiry. Processing retry is separate from post-commit delivery retry. The durable audit surface retains identifiers, SHA-256 text hashes, parser outcomes, attempt counts, safe error categories, and entity references, not financial descriptions.
 
 ## Development and Recovery
 

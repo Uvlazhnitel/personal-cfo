@@ -1,0 +1,6 @@
+ALTER TABLE "telegram_updates" DROP CONSTRAINT "telegram_update_status_ck";--> statement-breakpoint
+DROP INDEX "telegram_updates_claim_idx";--> statement-breakpoint
+ALTER TABLE "telegram_updates" ADD COLUMN "next_processing_attempt_at" timestamp(6) with time zone;--> statement-breakpoint
+CREATE INDEX "telegram_updates_claim_idx" ON "telegram_updates" USING btree ("source_key","status","next_processing_attempt_at","processing_started_at","update_id");--> statement-breakpoint
+ALTER TABLE "telegram_updates" ADD CONSTRAINT "telegram_update_retry_at_ck" CHECK (("telegram_updates"."status" = 'retryable' and "telegram_updates"."next_processing_attempt_at" is not null) or ("telegram_updates"."status" <> 'retryable' and "telegram_updates"."next_processing_attempt_at" is null));--> statement-breakpoint
+ALTER TABLE "telegram_updates" ADD CONSTRAINT "telegram_update_status_ck" CHECK ("telegram_updates"."status" in ('received','processing','retryable','awaiting_clarification','completed','rejected','unsupported','failed','expired'));

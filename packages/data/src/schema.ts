@@ -575,6 +575,198 @@ export const recalculationRecords = pgTable(
   ],
 );
 
+export const telegramOwnerLinks = pgTable(
+  'telegram_owner_links',
+  {
+    sourceKey: text('source_key').notNull(),
+    telegramUserId: bigint('telegram_user_id', { mode: 'bigint' }).notNull(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    createdAt: instant('created_at').notNull(),
+    updatedAt: instant('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceKey, table.telegramUserId] }),
+    uniqueIndex('telegram_owner_source_owner_uq').on(table.sourceKey, table.ownerId),
+  ],
+);
+
+export const telegramPollState = pgTable('telegram_poll_state', {
+  sourceKey: text('source_key').primaryKey(),
+  nextOffset: bigint('next_offset', { mode: 'bigint' }),
+  lastPolledAt: instant('last_polled_at'),
+  lastErrorCategory: text('last_error_category'),
+  updatedAt: instant('updated_at').notNull(),
+});
+
+export const telegramUpdates = pgTable(
+  'telegram_updates',
+  {
+    sourceKey: text('source_key').notNull(),
+    updateId: bigint('update_id', { mode: 'bigint' }).notNull(),
+    ownerId: uuid('owner_id').references(() => users.id),
+    chatId: bigint('chat_id', { mode: 'bigint' }),
+    senderId: bigint('sender_id', { mode: 'bigint' }),
+    messageId: bigint('message_id', { mode: 'bigint' }),
+    replyToMessageId: bigint('reply_to_message_id', { mode: 'bigint' }),
+    updateType: text('update_type').notNull(),
+    messageDate: instant('message_date'),
+    messageText: text('message_text'),
+    textHash: text('text_hash'),
+    locale: text('locale'),
+    status: text('status').notNull(),
+    parserOutcome: text('parser_outcome'),
+    proposalKind: text('proposal_kind'),
+    commandId: uuid('command_id').references(() => commandRecords.id),
+    entityType: text('entity_type'),
+    entityId: text('entity_id'),
+    safeErrorCategory: text('safe_error_category'),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    receivedAt: instant('received_at').notNull(),
+    processingStartedAt: instant('processing_started_at'),
+    nextProcessingAttemptAt: instant('next_processing_attempt_at'),
+    processedAt: instant('processed_at'),
+  },
+  (table) => [
+    primaryKey({ columns: [table.sourceKey, table.updateId] }),
+    uniqueIndex('telegram_message_identity_uq')
+      .on(table.sourceKey, table.chatId, table.messageId)
+      .where(sql`${table.messageId} is not null`),
+    index('telegram_updates_claim_idx').on(
+      table.sourceKey,
+      table.status,
+      table.nextProcessingAttemptAt,
+      table.processingStartedAt,
+      table.updateId,
+    ),
+    index('telegram_updates_owner_idx').on(table.ownerId, table.receivedAt),
+    check(
+      'telegram_update_status_ck',
+      sql`${table.status} in ('received','processing','retryable','awaiting_clarification','completed','rejected','unsupported','failed','expired')`,
+    ),
+    check(
+      'telegram_update_retry_at_ck',
+      sql`(${table.status} = 'retryable' and ${table.nextProcessingAttemptAt} is not null) or (${table.status} <> 'retryable' and ${table.nextProcessingAttemptAt} is null)`,
+    ),
+  ],
+);
+
+export const telegramPendingClarifications = pgTable(
+  'telegram_pending_clarifications',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    sourceKey: text('source_key').notNull(),
+    chatId: bigint('chat_id', { mode: 'bigint' }).notNull(),
+    senderId: bigint('sender_id', { mode: 'bigint' }).notNull(),
+    originUpdateId: bigint('origin_update_id', { mode: 'bigint' }).notNull(),
+    originMessageId: bigint('origin_message_id', { mode: 'bigint' }).notNull(),
+    proposalKind: text('proposal_kind').notNull(),
+    missingField: text('missing_field').notNull(),
+    knownFields: jsonb('known_fields'),
+    locale: text('locale').notNull(),
+    invalidAttempts: integer('invalid_attempts').notNull().default(0),
+    status: text('status').notNull(),
+    createdAt: instant('created_at').notNull(),
+    expiresAt: instant('expires_at').notNull(),
+    resolvedAt: instant('resolved_at'),
+    resolvedByUpdateId: bigint('resolved_by_update_id', { mode: 'bigint' }),
+  },
+  (table) => [
+    uniqueIndex('telegram_one_active_clarification_uq')
+      .on(table.ownerId, table.sourceKey, table.chatId)
+      .where(sql`${table.status} = 'active'`),
+    index('telegram_clarification_expiry_idx').on(table.status, table.expiresAt),
+    check(
+      'telegram_clarification_status_ck',
+      sql`${table.status} in ('active','resolved','cancelled','expired','superseded')`,
+    ),
+  ],
+);
+
+export const telegramDeliveries = pgTable(
+  'telegram_deliveries',
+  {
+    id: uuid('id').primaryKey(),
+    sourceKey: text('source_key').notNull(),
+    ownerId: uuid('owner_id').references(() => users.id),
+    updateId: bigint('update_id', { mode: 'bigint' }).notNull(),
+    chatId: bigint('chat_id', { mode: 'bigint' }).notNull(),
+    replyToMessageId: bigint('reply_to_message_id', { mode: 'bigint' }),
+    purpose: text('purpose').notNull(),
+    responseText: text('response_text'),
+    status: text('status').notNull(),
+    attemptCount: integer('attempt_count').notNull().default(0),
+    botMessageId: bigint('bot_message_id', { mode: 'bigint' }),
+    safeErrorCategory: text('safe_error_category'),
+    nextAttemptAt: instant('next_attempt_at'),
+    createdAt: instant('created_at').notNull(),
+    completedAt: instant('completed_at'),
+  },
+  (table) => [
+    uniqueIndex('telegram_delivery_update_purpose_uq').on(
+      table.sourceKey,
+      table.updateId,
+      table.purpose,
+    ),
+    index('telegram_delivery_pending_idx').on(table.sourceKey, table.status, table.nextAttemptAt),
+    check(
+      'telegram_delivery_status_ck',
+      sql`${table.status} in ('pending','sending','retryable','sent','failed','uncertain')`,
+    ),
+  ],
+);
+
+export const telegramMessageLinks = pgTable(
+  'telegram_message_links',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    sourceKey: text('source_key').notNull(),
+    chatId: bigint('chat_id', { mode: 'bigint' }).notNull(),
+    userMessageId: bigint('user_message_id', { mode: 'bigint' }).notNull(),
+    botMessageId: bigint('bot_message_id', { mode: 'bigint' }),
+    updateId: bigint('update_id', { mode: 'bigint' }).notNull(),
+    commandId: uuid('command_id')
+      .notNull()
+      .references(() => commandRecords.id),
+    proposalKind: text('proposal_kind').notNull(),
+    entityType: text('entity_type').notNull(),
+    entityId: text('entity_id').notNull(),
+    status: text('status').notNull(),
+    supersededBy: uuid('superseded_by'),
+    createdAt: instant('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('telegram_link_user_message_uq').on(
+      table.sourceKey,
+      table.chatId,
+      table.userMessageId,
+    ),
+    uniqueIndex('telegram_link_bot_message_uq')
+      .on(table.sourceKey, table.chatId, table.botMessageId)
+      .where(sql`${table.botMessageId} is not null`),
+    index('telegram_link_owner_time_idx').on(table.ownerId, table.createdAt),
+    check('telegram_link_status_ck', sql`${table.status} in ('current','superseded','cancelled')`),
+  ],
+);
+
+export const telegramIntegrationStatus = pgTable('telegram_integration_status', {
+  name: text('name').primaryKey(),
+  enabled: boolean('enabled').notNull(),
+  sourceKey: text('source_key'),
+  status: text('status').notNull(),
+  lastProcessedUpdateId: bigint('last_processed_update_id', { mode: 'bigint' }),
+  lastProcessedAt: instant('last_processed_at'),
+  lastErrorCategory: text('last_error_category'),
+  updatedAt: instant('updated_at').notNull(),
+});
+
 export const engineRuns = pgTable(
   'engine_runs',
   {

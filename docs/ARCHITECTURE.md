@@ -22,7 +22,7 @@ flowchart LR
     PWA --> APP
 ```
 
-Open Banking, portfolio, Telegram voice, and AI adapters are later milestones. Their interfaces are designed now; no provider is required by the core.
+Open Banking, portfolio, Telegram voice, and AI adapters are later milestones. Stage 6 includes the text-only Telegram Bot API adapter; no external provider is required by the financial core.
 
 ## Repository and Module Boundaries
 
@@ -114,7 +114,9 @@ The PWA is a decision-oriented projection over API data. It displays Net Worth, 
 
 ### Telegram
 
-The Telegram adapter verifies the configured user ID before processing content. Text or transcribed voice becomes a proposed command. Deterministic parsing is attempted first; AI classification may fill ambiguous category or intent fields but cannot write directly. The application validates the proposal, applies confidence policy, persists the command, and returns a concise confirmation. Voice files are deleted after transcription or failure handling.
+The worker owns a dependency-free native-fetch Telegram Bot API adapter. It verifies the configured non-bot sender and private chat before parsing, and silently terminalizes forwarded, edited, media, group, channel, bot-authored, unauthorized, and unrelated updates. Deterministic parsing produces a validated proposal, bounded clarification, or unsupported result. An `AmbiguousTransactionClassifier` port exists with a disabled production implementation; no AI SDK or call participates in Stage 6.
+
+Long-poll pages and their next offsets commit atomically before the worker requests a higher offset. Startup drains the durable local inbox first. Five-minute leases recover crashed processors; unexpected runtime failures use a separate persisted three-attempt state with bounded backoff. Financial effects, update finalization, entity/message links, pending replies, audit/version state, and recalculation enqueue share the command transaction. Replies occur only after commit and use an independent delivery retry state; an indeterminate network outcome is not retried. Shutdown aborts polling and drains the active database operation before pg-boss and PostgreSQL stop. Voice remains a separate later stage.
 
 ### Financial and Recommendation Engines
 

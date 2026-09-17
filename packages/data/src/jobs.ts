@@ -19,6 +19,9 @@ export const RECALCULATION_CAUSES = [
   'cash_reconciliation_resolution',
   'sinking_allocation',
   'automatic_sinking_allocation',
+  'cash_activity',
+  'sinking_fund_creation',
+  'cash_correction',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];

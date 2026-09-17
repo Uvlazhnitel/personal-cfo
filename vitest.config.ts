@@ -8,6 +8,6 @@ export default defineConfig({
       reporter: ['text', 'json-summary'],
     },
     exclude: [...configDefaults.exclude, '**/test-integration/**'],
-    include: ['packages/**/*.test.ts'],
+    include: ['packages/**/*.test.ts', 'apps/worker/test/**/*.test.ts'],
   },
 });

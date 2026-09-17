@@ -8,5 +8,11 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@personal-cfo/domain": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.4"
   }
 }

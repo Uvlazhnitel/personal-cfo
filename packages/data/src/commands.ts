@@ -49,6 +49,7 @@ import { generateUuidV7 } from './uuid-v7.js';
 type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
 
 export type CommandMutationResult = Readonly<{
+  mutated?: boolean;
   entityType: string;
   entityId: string;
   earliestAffectedAt: string | null;
@@ -80,6 +81,7 @@ export async function executeFinancialCommand(
   Readonly<{
     commandId: string;
     replayed: boolean;
+    mutated: boolean;
     inputVersion: bigint;
     result: Readonly<Record<string, unknown>>;
   }>
@@ -138,12 +140,39 @@ export async function executeFinancialCommand(
       return Object.freeze({
         commandId: existing.id,
         replayed: true,
+        mutated: storedResult['mutated'] !== false,
         inputVersion: BigInt(storedVersion),
         result: storedResult,
       });
     }
     try {
       const mutation = await mutate(tx, commandId);
+      if (mutation.mutated === false) {
+        const current = await tx.query.ownerInputVersions.findFirst({
+          where: eq(ownerInputVersions.ownerId, input.ownerId),
+        });
+        if (current === undefined)
+          throw new DataInvariantError(
+            'command.missing_owner_version',
+            'Owner input version is missing.',
+          );
+        const result = Object.freeze({
+          ...mutation.result,
+          mutated: false,
+          inputVersion: current.version.toString(),
+        });
+        await tx
+          .update(commandRecords)
+          .set({ status: 'completed', result: encodeSourceJson(result), completedAt: input.now })
+          .where(eq(commandRecords.id, commandId));
+        return Object.freeze({
+          commandId,
+          replayed: false,
+          mutated: false,
+          inputVersion: current.version,
+          result,
+        });
+      }
       const versions = await tx
         .update(ownerInputVersions)
         .set({ version: sql`${ownerInputVersions.version} + 1`, updatedAt: input.now })
@@ -194,6 +223,7 @@ export async function executeFinancialCommand(
       });
       const result = Object.freeze({
         ...mutation.result,
+        mutated: true,
         inputVersion: version.toString(),
         recalculationJobId: jobId,
       });
@@ -201,7 +231,13 @@ export async function executeFinancialCommand(
         .update(commandRecords)
         .set({ status: 'completed', result: encodeSourceJson(result), completedAt: input.now })
         .where(eq(commandRecords.id, commandId));
-      return Object.freeze({ commandId, replayed: false, inputVersion: version, result });
+      return Object.freeze({
+        commandId,
+        replayed: false,
+        mutated: true,
+        inputVersion: version,
+        result,
+      });
     } catch (error) {
       await tx
         .update(commandRecords)
