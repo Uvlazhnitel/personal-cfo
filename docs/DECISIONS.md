@@ -364,12 +364,24 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** `/debug` and logs expose operational categories rather than message contents or Telegram identifiers. A complete independent command supersedes an active clarification. Corrections use the recorded successful bot-message identity for 30 days and preserve compensating financial history.
 
+## ADR-032 — Provider-Neutral Portfolio Valuation and Contribution Contract
+
+**Status:** Accepted — 2026-09-17
+
+**Decision:** Normalize every portfolio source through the provider-neutral contract in `PORTFOLIO_CONTRACT.md`. `totalMarketValue` is the exact total economic investment-account value, while a three-state cash treatment records whether provider cash was included, excluded and exactly added/split, or unavailable. One explicit Net Worth projection prevents duplicate cash. Holdings, provider contributed-capital totals, and provider P/L remain detail/reconciliation evidence. Only deterministic confirmed transfer matching creates contribution principal; withdrawals are explicit. Source and receipt times, freshness, opaque cursor commit, stable source/revision identity, exact FX provenance, bounded raw receipt, and disconnect-without-purge semantics are mandatory.
+
+**Reasoning:** Provider fields alone do not establish accounting meaning. Separating valuation wealth, principal flows, market residual, and cash projection preserves the existing Net Worth/CCR invariants and makes replay, correction, stale-data gating, and provider replacement deterministic.
+
+**Alternatives:** Mirroring a provider DTO would leak unstable semantics into the application. Summing every available value double-counts cash and holdings. Trusting provider P/L or aggregate contributed capital can mix flows with performance. Selecting an undocumented provider contract would only hide the prerequisite.
+
+**Consequences:** Stage 7 adapters must prove their real API can supply or explicitly lack each capability and pass the synthetic contract fixtures before live ingestion. Raw portfolio payload ciphertext expires after 30 days while canonical facts and safe receipt/revision audit remain. Missing valuation, material ambiguity, stale data, or missing FX suppress invest-more recommendations. Stage 7 remains blocked only on concrete provider binding; no financial-engine formula changes result from this decision.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
 | --- | --- | --- | --- |
 | Open Banking provider and history depth | Provider coverage, PSD2 access, stable IDs, pending records, consent renewal, and pricing must be verified for Swedbank Latvia. | Product/engineering | Before Stage 8 |
-| Portfolio tracker contract | API shape, valuation time, holdings, cash inclusion, contribution history, and P/L semantics are unknown. | Product/engineering | Before Stage 7 |
+| Portfolio provider binding | Select the concrete tracker/provider and verify authentication, endpoint mapping, API limits, stable provider IDs/revisions, cursor behavior, timestamp availability, and every capability against `PORTFOLIO_CONTRACT.md`. | Product/engineering | Before live Stage 7 |
 | FX provider and missing-rate policy | Availability, licensing, weekend rates, corrections, and portfolio FX attribution need evaluation. | Product/engineering | Before non-EUR ingestion |
 | Imported-data deletion scope | FRD does not say whether deletion is per record, account, connection, or all data; re-import suppression and audit retention depend on it. | Product | Before Stage 8 |
 | Numerical policy calibration | Reserve months, materiality, Cash Drag threshold, recommendation increments, and forecast assumptions remain provisional configurable defaults needing synthetic/user validation. Pay-cycle and Step-Up algorithms are accepted. | Product | During Stages 3–5 |

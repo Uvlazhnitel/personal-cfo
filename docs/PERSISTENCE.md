@@ -10,6 +10,8 @@ Migrations in `packages/data/migrations/` are reviewed and sequential: identity/
 
 Account balance snapshots, portfolio valuations, investment contributions and attribution, primary-salary triggers, and spending observations have dedicated relational tables. Their owner-scoped foreign keys, exact monetary columns, timestamps, classifications, and status constraints are authoritative. `fact_payloads` cannot contain these fact types and is reserved for non-authoritative bounded metadata.
 
+The Stage 7 portfolio contract requires an encrypted raw receipt before normalization and advances an opaque cursor only with the successfully normalized canonical page. Portfolio payload ciphertext expires after 30 days; safe receipt metadata, hashes, normalization/source revision links, and canonical facts remain auditable. Disconnect deletes usable credentials and stops synchronization but does not purge canonical history. No Stage 7.0 migration implements these later persistence projections.
+
 Economic identity is stored in `economic_flows`. Classification revisions contain only classification meaning; loaders combine the immutable base identity with the active classification. A classification correction cannot change transaction identity, effective time, amount, or currency.
 
 ## Durable Calculation Flow

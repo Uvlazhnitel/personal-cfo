@@ -130,6 +130,8 @@ An AI adapter receives an allowlisted `CfoContext`: calculated amounts, metric c
 
 Bank, portfolio, FX, Telegram, and AI integrations implement domain ports. Each adapter maps provider objects into canonical commands and exposes provider-neutral errors. Provider schema changes therefore cannot propagate into the financial engine. Connection capabilities record whether balances, pending transactions, stable IDs, holdings, or contribution history are available.
 
+The Stage 7 portfolio boundary is specified in [PORTFOLIO_CONTRACT.md](PORTFOLIO_CONTRACT.md). A provider adapter explicitly discovers capabilities, durably receipts a page, normalizes it to exact provider-neutral snapshots/contribution evidence, deduplicates stable source revisions, and only then advances the opaque cursor with canonical persistence. Cash inclusion has three states and normalization emits exactly one Net Worth projection; holdings and provider P/L remain reconciliation evidence. The financial engine imports neither provider nor integration code. No live provider binding is selected by Stage 7.0.
+
 ## Error Handling and Data Completeness
 
 Errors are classified as validation, authentication, transient provider, rate limit, provider contract, conflict/duplicate, or internal invariant failures. Transient failures retry with jitter. Authentication failures disable the connection and request user action. Contract failures quarantine the raw record for review. Invariant failures stop the affected calculation and emit a high-severity operational alert; they never coerce missing values to zero.
