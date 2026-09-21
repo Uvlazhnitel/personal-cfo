@@ -128,11 +128,11 @@ Required reconciliation regressions are:
 
 ## Stage 7 — Portfolio Tracker Integration
 
-**Contract status:** Stage 7.0 resolved provider-neutral valuation, cash, holding, contribution, revision, cursor, freshness, and retention semantics in `PORTFOLIO_CONTRACT.md`. Live Stage 7 remains `BLOCKED_ON_PROVIDER_BINDING` until a concrete provider and verified API/auth mapping satisfy that contract.
+**Contract status:** `READY_FOR_PROVIDER_ADAPTER`. Stage 7.0 resolved provider-neutral valuation, cash, holding, contribution, revision, cursor, freshness, and retention semantics. Stage 7.0.2 selects Sharesight User API V2/V2.1 and verifies its authentication, endpoint, capability, identity, precision, revision, and limitation mapping in `PORTFOLIO_PROVIDER_SHARESIGHT.md`. No live HTTP adapter, credentials, persistence, or synchronization job is implemented yet.
 
 **Goal:** Import portfolio value, holdings summary, contribution evidence, and reconciliation data without double counting.
 
-**Dependencies:** Stage 5; provider-neutral contract resolved; concrete portfolio provider binding selected and verified.
+**Dependencies:** Stage 5; provider-neutral contract resolved; Sharesight API access provisioned for the personal account; manual Lightyear import freshness explicitly confirmed or recommendations kept source-incomplete.
 
 **Tasks:** Implement capability discovery, encrypted connection configuration, raw receipt, normalization, cursoring, contribution matching, stale-state handling, and contract fixtures.
 

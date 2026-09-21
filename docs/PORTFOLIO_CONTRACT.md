@@ -1,8 +1,8 @@
 # Provider-Neutral Portfolio Contract
 
-This document is the application-side contract for Stage 7 portfolio ingestion. It resolves accounting and normalization semantics without selecting or implementing a provider. The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
+This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.0.2 binds the first adapter to Sharesight without adding live synchronization; the verified provider mapping is in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
 
-Stage 7.0 readiness is `BLOCKED_ON_PROVIDER_BINDING`: the repository names an existing portfolio tracker and Lightyear as product context, but contains no selected provider, verified API documentation, authentication contract, or endpoint mapping. A provider must be selected and proven to satisfy this contract before the live Stage 7 integration starts.
+Stage 7 contract readiness is `READY_FOR_PROVIDER_ADAPTER`. Sharesight User API V2/V2.1 is the selected provider for the single-owner deployment. This status authorizes implementing the later read-only adapter; it does not mean HTTP, credential persistence, synchronization jobs, or canonical portfolio persistence exist.
 
 ## Terminology and authority
 
@@ -108,6 +108,8 @@ Connection, provider portfolio, valuation, holding, contribution, and revision i
 
 Each raw receipt records provider, endpoint capability, request cursor/window, `receivedAt`, payload SHA-256, source/revision IDs, normalization version, and processing status. Provider payload ciphertext is retained for at most 30 days for replay/diagnostics, then deleted. Receipt metadata, hashes, canonical facts, source links, and revision audit remain under their normal retention. Raw payloads are never financial truth.
 
+Sharesight has no documented provider cursor or pagination token. Its capability remains `incremental_cursor=false`. A later adapter may split full date-range reads into deterministic application-owned calendar windows and encode the current window as a composite cursor, but that state is not provider state and cannot imply incremental completeness. Stable provider IDs plus deterministic fingerprints make full-window replay idempotent.
+
 ## Connection and security lifecycle
 
 Connection lifecycle is separate from metric completeness: `disconnected`, `connecting`, `active`, `degraded`, `reauth_required`, and `disabled`. Access/refresh tokens, API keys, client secrets, and provider credentials are secrets encrypted at rest with the existing versioned authenticated-encryption boundary. They never enter logs, fixtures, jobs, cursors, or raw receipt metadata. Provider name, non-sensitive connection state, capability set, key version, consent expiry, sync timestamps, and keyed/encrypted account references are metadata. Rotation replaces the encrypted envelope; revocation deletes usable credentials and stops synchronization.
@@ -120,4 +122,4 @@ Account IDs, holdings, portfolio values, contribution evidence, raw payloads, an
 
 `PORTFOLIO_CONTRACT_FIXTURES` covers valuation-only, contribution-only, market-only gain, mixed contribution/withdrawal/gain, withdrawal, cash included, cash excluded with aggregate and split projections, unknown cash treatment, stale and missing valuation, duplicate page, revised fact, cursor replay, holdings mismatch, and provider P/L disagreement. It follows the Stage 3 pattern of recurring contributions and an ad-hoc larger contribution without copying personal data.
 
-The full Stage 7 implementation may add HTTP adapters, encrypted connection persistence, durable sync jobs, and provider-specific contract tests only after provider binding is resolved. This contract authorizes no trading, Open Banking, AI classification, automatic contribution, provider write, or Stage 8 behavior.
+The full Stage 7 implementation may now add the read-only Sharesight HTTP adapter, encrypted connection persistence, durable sync jobs, and canonical persistence against the accepted binding. Manual Lightyear imports expose no API freshness marker; until freshness is independently confirmed, normalized snapshots are `source_incomplete` and cannot authorize invest-more. This contract authorizes no trading, Open Banking, AI classification, automatic contribution, provider write, or Stage 8 behavior.
