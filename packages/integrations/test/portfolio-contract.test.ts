@@ -7,13 +7,14 @@ import {
   parseInstant,
 } from '@personal-cfo/domain';
 import type { DomainValidationError } from '@personal-cfo/domain';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 
 import {
   PORTFOLIO_CAPABILITIES,
   PORTFOLIO_CONTRACT_FIXTURES,
   assessPortfolioReadiness,
   calculateMarketMovement,
+  createConfirmedContributionPrincipal,
   createContributionEvidence,
   createPortfolioCapabilities,
   createPortfolioSnapshot,
@@ -21,9 +22,15 @@ import {
   parsePortfolioCursor,
   reconcileHoldings,
   serializePortfolioCursor,
+  validateConfirmedContributionPrincipal,
   validateContributionMatch,
 } from '../src/portfolio/index.js';
-import type { PortfolioCapabilities, PortfolioCursor } from '../src/portfolio/index.js';
+import type {
+  ConfirmedContributionPrincipal,
+  ContributionEvidence,
+  PortfolioCapabilities,
+  PortfolioCursor,
+} from '../src/portfolio/index.js';
 
 function allCapabilities(value: boolean): PortfolioCapabilities {
   return createPortfolioCapabilities(
@@ -139,7 +146,7 @@ describe('portfolio provider-neutral contract', () => {
     expect(fixtures.contributionOnly.reconciliation.marketMovement.amountMinor).toBe(0n);
     expect(fixtures.marketOnlyGain.marketMovement.amountMinor).toBe(50_000n);
     expect(fixtures.marketOnlyGain.contributions.amountMinor).toBe(0n);
-    expect(fixtures.mixedContributionAndGain).toMatchObject({
+    expect(fixtures.mixedContributionAndGain.reconciliation).toMatchObject({
       contributions: { amountMinor: 100_000n },
       withdrawals: { amountMinor: 20_000n },
       marketMovement: { amountMinor: 50_000n },
@@ -173,6 +180,12 @@ describe('portfolio provider-neutral contract', () => {
         confirmedContributionKey: 'connection-1:contribution-1',
       }).state,
     ).toBe('confirmed');
+    expect(PORTFOLIO_CONTRACT_FIXTURES.contributionOnly.principal).toMatchObject({
+      authority: 'confirmed_principal',
+      contributionKey: 'principal-contribution-1',
+      canonicalTransferId: 'transfer-contribution-1',
+      amount: { amountMinor: 100_000n },
+    });
     expectContractError(
       () =>
         validateContributionMatch({
@@ -181,6 +194,65 @@ describe('portfolio provider-neutral contract', () => {
           confirmedContributionKey: 'not-authoritative-yet',
         }),
       'invalid_match_authority',
+    );
+    expectContractError(
+      () =>
+        validateContributionMatch({
+          state: 'confirmed',
+          evidence: { ...matchEvidence, amountAndCurrencyExact: false },
+          confirmedContributionKey: 'connection-1:contribution-1',
+        }),
+      'insufficient_match_evidence',
+    );
+    expectContractError(
+      () =>
+        validateContributionMatch({
+          state: 'candidate',
+          evidence: {
+            ...matchEvidence,
+            amountAndCurrencyExact: 'yes' as unknown as boolean,
+            canonicalTransferId: null,
+          },
+          confirmedContributionKey: null,
+        }),
+      'invalid_match_evidence',
+    );
+    expectContractError(
+      () =>
+        validateConfirmedContributionPrincipal({
+          ...PORTFOLIO_CONTRACT_FIXTURES.contributionOnly.principal,
+          amount: createMoney(0n, EUR),
+        }),
+      'non_positive_principal',
+    );
+  });
+
+  it('keeps raw provider evidence outside authoritative market reconciliation', () => {
+    expectTypeOf<ContributionEvidence>().not.toMatchTypeOf<ConfirmedContributionPrincipal>();
+    expectTypeOf(calculateMarketMovement)
+      .parameter(2)
+      .toEqualTypeOf<readonly ConfirmedContributionPrincipal[]>();
+
+    const unmatched = PORTFOLIO_CONTRACT_FIXTURES.unmatchedContributionEvidence;
+    expect(unmatched.principal).toBeNull();
+    expect(unmatched.reconciliation).toMatchObject({
+      contributions: { amountMinor: 0n },
+      marketMovement: { amountMinor: 100_000n },
+    });
+
+    const candidate = PORTFOLIO_CONTRACT_FIXTURES.candidateContributionEvidence;
+    expect(candidate.principal).toBeNull();
+    expect(candidate.reconciliation).toMatchObject({
+      contributions: { amountMinor: 0n },
+      marketMovement: { amountMinor: 100_000n },
+    });
+  });
+
+  it('rejects a confirmed contribution matched to the wrong portfolio account', () => {
+    const attempt = PORTFOLIO_CONTRACT_FIXTURES.crossAccountConfirmedAttempt;
+    expectContractError(
+      () => createConfirmedContributionPrincipal(attempt.evidence, attempt.match),
+      'portfolio_account_mismatch',
     );
   });
 
@@ -226,17 +298,31 @@ describe('portfolio provider-neutral contract', () => {
 
   it('makes stale, missing, ambiguous cash, and missing FX suppress recommendations', () => {
     const now = parseInstant('2026-09-17T18:00:00Z');
-    expect(assessPortfolioReadiness(PORTFOLIO_CONTRACT_FIXTURES.valuationOnly, now)).toMatchObject({
-      completeness: 'complete',
-      recommendationAllowed: true,
+    const exactHoldings = reconcileHoldings(
+      PORTFOLIO_CONTRACT_FIXTURES.valuationOnly,
+      createMoney(1n, EUR),
+    );
+    expect(
+      assessPortfolioReadiness(PORTFOLIO_CONTRACT_FIXTURES.valuationOnly, now, {
+        holdingsReconciliation: exactHoldings,
+      }),
+    ).toMatchObject({ completeness: 'complete', recommendationAllowed: true });
+    const stale = assessPortfolioReadiness(PORTFOLIO_CONTRACT_FIXTURES.staleValuation, now, {
+      holdingsReconciliation: reconcileHoldings(
+        PORTFOLIO_CONTRACT_FIXTURES.staleValuation,
+        createMoney(1n, EUR),
+      ),
     });
-    const stale = assessPortfolioReadiness(PORTFOLIO_CONTRACT_FIXTURES.staleValuation, now);
     expect(stale).toMatchObject({
       completeness: 'partial',
       recommendationAllowed: false,
     });
     expect(stale.warnings).toContain('stale_valuation');
-    expect(assessPortfolioReadiness(null, now)).toEqual({
+    expect(
+      assessPortfolioReadiness(null, now, {
+        holdingsReconciliation: { status: 'unavailable', difference: null },
+      }),
+    ).toEqual({
       completeness: 'unavailable',
       recommendationAllowed: false,
       warnings: ['missing_valuation'],
@@ -244,6 +330,7 @@ describe('portfolio provider-neutral contract', () => {
     const unknownCash = assessPortfolioReadiness(
       PORTFOLIO_CONTRACT_FIXTURES.cashTreatmentUnknown,
       now,
+      { holdingsReconciliation: { status: 'unavailable', difference: null } },
     );
     expect(unknownCash).toMatchObject({
       completeness: 'unavailable',
@@ -262,12 +349,55 @@ describe('portfolio provider-neutral contract', () => {
       cash: { treatment: 'included_in_total', amount: null },
       netWorthProjection: { kind: 'unavailable', reason: 'fx_unavailable' },
     });
-    const unavailableFx = assessPortfolioReadiness(fxUnavailable, now);
+    const unavailableFx = assessPortfolioReadiness(fxUnavailable, now, {
+      holdingsReconciliation: { status: 'unavailable', difference: null },
+    });
     expect(unavailableFx).toMatchObject({
       completeness: 'unavailable',
       recommendationAllowed: false,
     });
     expect(unavailableFx.warnings).toContain('fx_unavailable');
+  });
+
+  it('gates recommendations only for a material holdings mismatch', () => {
+    const now = parseInstant('2026-09-17T18:00:00Z');
+    const material = PORTFOLIO_CONTRACT_FIXTURES.materialHoldingsMismatch;
+    const materialReadiness = assessPortfolioReadiness(material.snapshot, now, {
+      holdingsReconciliation: material.reconciliation,
+    });
+    expect(materialReadiness).toMatchObject({
+      completeness: 'partial',
+      recommendationAllowed: false,
+    });
+    expect(materialReadiness.warnings).toContain('valuation_components_mismatch');
+
+    const withinRounding = PORTFOLIO_CONTRACT_FIXTURES.withinRoundingHoldings;
+    const withinReadiness = assessPortfolioReadiness(withinRounding.snapshot, now, {
+      holdingsReconciliation: withinRounding.reconciliation,
+    });
+    expect(withinReadiness).toMatchObject({
+      completeness: 'complete',
+      recommendationAllowed: true,
+    });
+    expect(withinReadiness.warnings).not.toContain('valuation_components_mismatch');
+
+    const unavailable = PORTFOLIO_CONTRACT_FIXTURES.unavailableHoldingsDetail;
+    const unavailableReadiness = assessPortfolioReadiness(unavailable.snapshot, now, {
+      holdingsReconciliation: unavailable.reconciliation,
+    });
+    expect(unavailableReadiness).toMatchObject({
+      completeness: 'complete',
+      recommendationAllowed: true,
+    });
+    expect(unavailableReadiness.warnings).toContain('holdings_incomplete');
+    expect(unavailableReadiness.warnings).not.toContain('valuation_components_mismatch');
+    expectContractError(
+      () =>
+        assessPortfolioReadiness(material.snapshot, now, {
+          holdingsReconciliation: { status: 'material_mismatch', difference: null },
+        }),
+      'invalid_holdings_reconciliation',
+    );
   });
 
   it('does not use empty holdings to mean unsupported and zero holdings simultaneously', () => {

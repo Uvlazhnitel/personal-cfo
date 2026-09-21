@@ -62,13 +62,15 @@ When complete holding market values are available, their EUR reporting values ar
 - `material_mismatch`;
 - `unavailable`, when components, cash semantics, completeness, or FX are insufficient.
 
-This diagnostic can emit `valuation_components_mismatch`; it never replaces the authoritative provider total with a locally summed value.
+This diagnostic can emit `valuation_components_mismatch`; it never replaces the authoritative provider total with a locally summed value. A material mismatch makes recommendation readiness `partial` and suppresses invest-more recommendations. Exact and within-provider-rounding results do not block recommendations. An unavailable comparison also does not block an otherwise complete, fresh authoritative total because holdings remain reconciliation detail.
 
 ## Contributions, withdrawals, and matching
 
-`ContributionEvidence` carries the connection and portfolio IDs, optional stable provider event ID, exact positive money, explicit `contribution` or `withdrawal` direction, effective instant, optional provider reference, and revision identity. A sign is not used to guess direction. Dividends, interest, internal cash movements, market gains, and ordinary purchases do not become contribution principal by default.
+`ContributionEvidence` carries the connection and portfolio IDs, optional stable provider event ID, exact positive money, explicit `contribution` or `withdrawal` direction, effective instant, optional provider reference, and revision identity. It is a provider observation only and is never authoritative principal. A sign is not used to guess direction. Dividends, interest, internal cash movements, market gains, and ordinary purchases do not become contribution principal by default.
 
-Matching to a canonical bank/brokerage transfer is deterministic. Evidence records exact amount/currency agreement, non-negative time distance, provider and bank reference agreement when present, portfolio-account agreement, and the canonical transfer identity. States are `unmatched`, `candidate`, `confirmed`, and `rejected`. A candidate has no authoritative principal. `confirmed` requires exact money and a canonical transfer ID and yields one stable contribution key. The same bank and portfolio observations link to that one contribution rather than creating two economic facts.
+Matching to a canonical bank/brokerage transfer is deterministic. Evidence records exact amount/currency agreement, non-negative time distance, provider and bank reference agreement when present, portfolio-account agreement, and the canonical transfer identity. States are `unmatched`, `candidate`, `confirmed`, and `rejected`. Unmatched, candidate, and rejected evidence produces no authoritative principal. `confirmed` requires exact money, the correct portfolio account, a canonical transfer ID, and one stable confirmed contribution key.
+
+Only `ConfirmedContributionPrincipal`, produced by the validated evidence-plus-match constructor, may enter contribution/withdrawal reconciliation. Its contribution key identifies one economic principal flow: bank and portfolio observations of the same transfer converge on that key rather than creating provider-specific principal records. Reference and time evidence remain attached for audit but are not mandatory when the required deterministic proof is present.
 
 For complete EUR boundaries, residual market movement is exactly:
 
@@ -92,7 +94,7 @@ Freshness is evaluated against supplied UTC `now` and persisted `staleAt`. The c
 
 The bounded warnings are `cash_treatment_unknown`, `contributed_capital_unavailable`, `holdings_incomplete`, `provider_pl_semantics_unverified`, `stale_valuation`, `missing_valuation`, `valuation_components_mismatch`, `fx_unavailable`, and `source_incomplete`.
 
-Recommendation gating is mandatory for a missing valuation, unknown cash treatment that risks duplicate value, unavailable required FX, stale valuation, or materially incomplete/ambiguous valuation. Missing value is `unavailable`, never zero. Holdings or contributed-capital detail may be incomplete without changing a complete current valuation, but dependent reconciliation views disclose the warning. Existing engine completeness and recommendation rules remain authoritative downstream.
+Recommendation gating is mandatory for a missing valuation, unknown cash treatment that risks duplicate value, unavailable required FX, stale valuation, or material `valuation_components_mismatch`. A material holdings mismatch leaves the known provider total in place, marks readiness at least `partial`, and suppresses invest-more. Missing value is `unavailable`, never zero. Holdings or contributed-capital detail may be incomplete without changing a complete current valuation, but dependent reconciliation views disclose the warning. Existing engine completeness and recommendation rules remain authoritative downstream.
 
 ## Currency and FX
 

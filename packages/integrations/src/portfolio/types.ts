@@ -153,6 +153,17 @@ export type ContributionMatch = Readonly<{
   confirmedContributionKey: string | null;
 }>;
 
+export type ConfirmedContributionPrincipal = Readonly<{
+  authority: 'confirmed_principal';
+  contributionKey: string;
+  canonicalTransferId: string;
+  providerPortfolioId: string;
+  effectiveAt: Instant;
+  amount: Money;
+  direction: ContributionDirection;
+  matchEvidence: ContributionMatchEvidence;
+}>;
+
 export type ProviderProfitLoss = Readonly<{
   amount: ReportableAmount;
   semantics: 'unknown' | 'all_time' | 'unrealized' | 'realized_and_unrealized' | 'period';
@@ -184,6 +195,10 @@ export type PortfolioReadiness = Readonly<{
   completeness: Completeness;
   recommendationAllowed: boolean;
   warnings: readonly PortfolioWarningCode[];
+}>;
+
+export type PortfolioReadinessEvidence = Readonly<{
+  holdingsReconciliation: HoldingsReconciliation;
 }>;
 
 export type MarketMovementReconciliation = Readonly<{

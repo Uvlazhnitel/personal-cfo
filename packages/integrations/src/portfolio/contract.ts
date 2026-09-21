@@ -16,8 +16,10 @@ import type { Money, ReportableAmount } from '@personal-cfo/domain';
 import {
   PORTFOLIO_CAPABILITIES,
   PORTFOLIO_WARNING_CODES,
+  type ConfirmedContributionPrincipal,
   type ContributionEvidence,
   type ContributionMatch,
+  type ContributionMatchEvidence,
   type HoldingsReconciliation,
   type MarketMovementReconciliation,
   type NormalizedHolding,
@@ -27,6 +29,7 @@ import {
   type PortfolioCursor,
   type PortfolioNetWorthProjection,
   type PortfolioReadiness,
+  type PortfolioReadinessEvidence,
   type PortfolioSnapshot,
   type PortfolioWarningCode,
   type ProviderRevisionIdentity,
@@ -403,6 +406,43 @@ export function reconcileHoldings(
   return Object.freeze({ status, difference });
 }
 
+export function validateHoldingsReconciliation(
+  input: HoldingsReconciliation,
+): HoldingsReconciliation {
+  if (input.status === 'unavailable') {
+    if (input.difference !== null) {
+      return invalid(
+        'invalid_holdings_reconciliation',
+        'Unavailable holdings reconciliation cannot carry a difference.',
+      );
+    }
+    return Object.freeze({ status: input.status, difference: null });
+  }
+  if (!['exact', 'within_provider_rounding', 'material_mismatch'].includes(input.status)) {
+    return invalid('invalid_holdings_reconciliation', 'Holdings reconciliation is unsupported.');
+  }
+  if (input.difference === null) {
+    return invalid(
+      'invalid_holdings_reconciliation',
+      'A comparable holdings reconciliation requires an exact difference.',
+    );
+  }
+  const difference = createMoney(input.difference.amountMinor, input.difference.currency);
+  if (input.status === 'exact' && difference.amountMinor !== 0n) {
+    return invalid(
+      'invalid_holdings_reconciliation',
+      'Exact holdings reconciliation requires a zero difference.',
+    );
+  }
+  if (input.status !== 'exact' && difference.amountMinor === 0n) {
+    return invalid(
+      'invalid_holdings_reconciliation',
+      'A non-exact holdings reconciliation requires a non-zero difference.',
+    );
+  }
+  return Object.freeze({ status: input.status, difference });
+}
+
 export function createContributionEvidence(input: ContributionEvidence): ContributionEvidence {
   const amount = createMoney(input.amount.amountMinor, input.amount.currency);
   if (amount.amountMinor <= 0n) {
@@ -429,15 +469,42 @@ export function createContributionEvidence(input: ContributionEvidence): Contrib
   });
 }
 
-export function validateContributionMatch(input: ContributionMatch): ContributionMatch {
-  const evidence = input.evidence;
+function createContributionMatchEvidence(
+  input: ContributionMatchEvidence,
+): ContributionMatchEvidence {
   if (
-    evidence.effectiveTimeDistanceSeconds !== null &&
-    (!Number.isSafeInteger(evidence.effectiveTimeDistanceSeconds) ||
-      evidence.effectiveTimeDistanceSeconds < 0)
+    typeof input.amountAndCurrencyExact !== 'boolean' ||
+    typeof input.portfolioAccountExact !== 'boolean' ||
+    (input.providerReferenceExact !== null && typeof input.providerReferenceExact !== 'boolean') ||
+    (input.bankReferenceExact !== null && typeof input.bankReferenceExact !== 'boolean')
+  ) {
+    return invalid('invalid_match_evidence', 'Contribution match flags must be booleans or null.');
+  }
+  if (
+    input.effectiveTimeDistanceSeconds !== null &&
+    (!Number.isSafeInteger(input.effectiveTimeDistanceSeconds) ||
+      input.effectiveTimeDistanceSeconds < 0)
   ) {
     return invalid('invalid_match_distance', 'Match time distance must be a non-negative integer.');
   }
+  return Object.freeze({
+    amountAndCurrencyExact: input.amountAndCurrencyExact,
+    effectiveTimeDistanceSeconds: input.effectiveTimeDistanceSeconds,
+    providerReferenceExact: input.providerReferenceExact,
+    bankReferenceExact: input.bankReferenceExact,
+    portfolioAccountExact: input.portfolioAccountExact,
+    canonicalTransferId:
+      input.canonicalTransferId === null
+        ? null
+        : parseIdentity(input.canonicalTransferId, 'Canonical transfer'),
+  });
+}
+
+export function validateContributionMatch(input: ContributionMatch): ContributionMatch {
+  if (!['unmatched', 'candidate', 'confirmed', 'rejected'].includes(input.state)) {
+    return invalid('invalid_match_state', 'Contribution match state is unsupported.');
+  }
+  const evidence = createContributionMatchEvidence(input.evidence);
   const confirmed = input.state === 'confirmed';
   if (confirmed !== (input.confirmedContributionKey !== null)) {
     return invalid(
@@ -445,29 +512,97 @@ export function validateContributionMatch(input: ContributionMatch): Contributio
       'Only a confirmed match may carry the authoritative contribution key.',
     );
   }
+  if (confirmed && !evidence.portfolioAccountExact) {
+    return invalid(
+      'portfolio_account_mismatch',
+      'A confirmed contribution must match the intended portfolio account.',
+    );
+  }
   if (confirmed && (!evidence.amountAndCurrencyExact || evidence.canonicalTransferId === null)) {
     return invalid(
       'insufficient_match_evidence',
-      'Confirmation requires exact money and a canonical transfer identity.',
+      'Confirmation requires exact money, the correct portfolio account, and a canonical transfer identity.',
     );
   }
   return Object.freeze({
     state: input.state,
-    evidence: Object.freeze({ ...evidence }),
-    confirmedContributionKey: input.confirmedContributionKey,
+    evidence,
+    confirmedContributionKey:
+      input.confirmedContributionKey === null
+        ? null
+        : parseIdentity(input.confirmedContributionKey, 'Confirmed contribution'),
+  });
+}
+
+export function createConfirmedContributionPrincipal(
+  evidenceInput: ContributionEvidence,
+  matchInput: ContributionMatch,
+): ConfirmedContributionPrincipal | null {
+  const evidence = createContributionEvidence(evidenceInput);
+  const match = validateContributionMatch(matchInput);
+  if (match.state !== 'confirmed') return null;
+  if (match.confirmedContributionKey === null || match.evidence.canonicalTransferId === null) {
+    return invalid('invalid_confirmed_match', 'Confirmed contribution match is incomplete.');
+  }
+  return Object.freeze({
+    authority: 'confirmed_principal',
+    contributionKey: match.confirmedContributionKey,
+    canonicalTransferId: match.evidence.canonicalTransferId,
+    providerPortfolioId: evidence.providerPortfolioId,
+    effectiveAt: evidence.effectiveAt,
+    amount: evidence.amount,
+    direction: evidence.direction,
+    matchEvidence: match.evidence,
+  });
+}
+
+export function validateConfirmedContributionPrincipal(
+  input: ConfirmedContributionPrincipal,
+): ConfirmedContributionPrincipal {
+  if (input.authority !== 'confirmed_principal') {
+    return invalid('invalid_principal_authority', 'Contribution principal must be confirmed.');
+  }
+  const matchEvidence = createContributionMatchEvidence(input.matchEvidence);
+  const canonicalTransferId = parseIdentity(input.canonicalTransferId, 'Canonical transfer');
+  if (
+    !matchEvidence.amountAndCurrencyExact ||
+    !matchEvidence.portfolioAccountExact ||
+    matchEvidence.canonicalTransferId !== canonicalTransferId
+  ) {
+    return invalid(
+      'invalid_principal_evidence',
+      'Confirmed principal must retain exact money, account, and transfer evidence.',
+    );
+  }
+  const amount = createMoney(input.amount.amountMinor, input.amount.currency);
+  if (amount.amountMinor <= 0n) {
+    return invalid('non_positive_principal', 'Confirmed principal amount must be positive.');
+  }
+  if (input.direction !== 'contribution' && input.direction !== 'withdrawal') {
+    return invalid('invalid_contribution_direction', 'Contribution direction is unsupported.');
+  }
+  return Object.freeze({
+    authority: input.authority,
+    contributionKey: parseIdentity(input.contributionKey, 'Confirmed contribution'),
+    canonicalTransferId,
+    providerPortfolioId: parseIdentity(input.providerPortfolioId, 'Portfolio account'),
+    effectiveAt: parseInstant(input.effectiveAt),
+    amount,
+    direction: input.direction,
+    matchEvidence,
   });
 }
 
 export function calculateMarketMovement(
   openingValue: Money,
   closingValue: Money,
-  flows: readonly ContributionEvidence[],
+  flows: readonly ConfirmedContributionPrincipal[],
   fxValuationEffect: Money,
 ): MarketMovementReconciliation {
   const opening = createMoney(openingValue.amountMinor, openingValue.currency);
   const closing = createMoney(closingValue.amountMinor, closingValue.currency);
   const fxEffect = createMoney(fxValuationEffect.amountMinor, fxValuationEffect.currency);
-  const normalizedFlows = flows.map(createContributionEvidence);
+  const normalizedFlows = flows.map(validateConfirmedContributionPrincipal);
   const contributions = sumMoney(
     normalizedFlows.filter((flow) => flow.direction === 'contribution').map((flow) => flow.amount),
     opening.currency,
@@ -504,8 +639,12 @@ function uniqueWarnings(
 export function assessPortfolioReadiness(
   snapshotInput: PortfolioSnapshot | null,
   nowInput: PortfolioSnapshot['receivedAt'],
+  evidenceInput: PortfolioReadinessEvidence,
 ): PortfolioReadiness {
   const now = parseInstant(nowInput);
+  const holdingsReconciliation = validateHoldingsReconciliation(
+    evidenceInput.holdingsReconciliation,
+  );
   if (snapshotInput === null) {
     return Object.freeze({
       completeness: 'unavailable',
@@ -524,15 +663,23 @@ export function assessPortfolioReadiness(
   if (compareInstants(now, snapshot.staleAt) > 0) warnings.push('stale_valuation');
   if (snapshot.holdings.completeness !== 'complete') warnings.push('holdings_incomplete');
   if (snapshot.contributedCapital === null) warnings.push('contributed_capital_unavailable');
+  if (holdingsReconciliation.status === 'material_mismatch') {
+    warnings.push('valuation_components_mismatch');
+  }
 
   const unavailable =
     warnings.some((warning) =>
       ['cash_treatment_unknown', 'fx_unavailable', 'missing_valuation'].includes(warning),
     ) || snapshot.sourceCompleteness === 'unavailable';
-  const authoritative = !unavailable && !warnings.includes('stale_valuation');
+  const authoritative =
+    !unavailable &&
+    !warnings.includes('stale_valuation') &&
+    !warnings.includes('valuation_components_mismatch');
   const completeness = unavailable
     ? 'unavailable'
-    : warnings.includes('stale_valuation') || warnings.includes('source_incomplete')
+    : warnings.includes('stale_valuation') ||
+        warnings.includes('source_incomplete') ||
+        warnings.includes('valuation_components_mismatch')
       ? 'partial'
       : 'complete';
   return Object.freeze({

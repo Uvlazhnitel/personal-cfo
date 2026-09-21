@@ -10,11 +10,15 @@ import {
 
 import {
   calculateMarketMovement,
+  createConfirmedContributionPrincipal,
   createContributionEvidence,
   createPortfolioSnapshot,
+  reconcileHoldings,
 } from './contract.js';
 import type {
+  ConfirmedContributionPrincipal,
   ContributionEvidence,
+  ContributionMatch,
   MarketMovementReconciliation,
   PortfolioCursor,
   PortfolioSnapshot,
@@ -164,14 +168,57 @@ function flow(
 function movement(
   openingMinor: bigint,
   closingMinor: bigint,
-  flows: readonly ContributionEvidence[],
+  flows: readonly ConfirmedContributionPrincipal[],
 ): MarketMovementReconciliation {
   return calculateMarketMovement(eur(openingMinor), eur(closingMinor), flows, eur(0n));
+}
+
+function match(
+  id: string,
+  state: ContributionMatch['state'],
+  portfolioAccountExact = true,
+): ContributionMatch {
+  const confirmed = state === 'confirmed';
+  return Object.freeze({
+    state,
+    evidence: Object.freeze({
+      amountAndCurrencyExact: true,
+      effectiveTimeDistanceSeconds: 30,
+      providerReferenceExact: true,
+      bankReferenceExact: true,
+      portfolioAccountExact,
+      canonicalTransferId: confirmed ? `transfer-${id}` : null,
+    }),
+    confirmedContributionKey: confirmed ? `principal-${id}` : null,
+  });
+}
+
+function confirmed(
+  evidence: ContributionEvidence,
+  id: string,
+): Readonly<{ match: ContributionMatch; principal: ConfirmedContributionPrincipal }> {
+  const confirmedMatch = match(id, 'confirmed');
+  const principal = createConfirmedContributionPrincipal(evidence, confirmedMatch);
+  if (principal === null) throw new Error('Synthetic confirmed match must produce principal.');
+  return Object.freeze({ match: confirmedMatch, principal });
 }
 
 const valuationOnly = includedCashSnapshot();
 const contribution = flow('contribution-1', 100_000n, 'contribution');
 const withdrawal = flow('withdrawal-1', 20_000n, 'withdrawal');
+const confirmedContribution = confirmed(contribution, 'contribution-1');
+const confirmedWithdrawal = confirmed(withdrawal, 'withdrawal-1');
+const unmatchedContributionMatch = match('unmatched-contribution-1', 'unmatched');
+const candidateContributionMatch = match('candidate-contribution-1', 'candidate');
+const holdingsTotalMismatch = includedCashSnapshot({
+  holdings: {
+    completeness: 'complete',
+    items: holdings(parseInstant('2026-09-15T18:00:00Z'), 970_000n),
+  },
+});
+const holdingsUnavailable = includedCashSnapshot({
+  holdings: { completeness: 'unavailable', items: [] },
+});
 const duplicateCursor: PortfolioCursor = Object.freeze({ kind: 'page_token', value: 'page-2' });
 const providerPlDisagreement: ProviderProfitLoss = Object.freeze({
   amount: reportable(60_000n),
@@ -186,13 +233,41 @@ export const PORTFOLIO_CONTRACT_FIXTURES = Object.freeze({
   valuationOnly,
   contributionOnly: Object.freeze({
     evidence: contribution,
-    reconciliation: movement(1_000_000n, 1_100_000n, [contribution]),
+    match: confirmedContribution.match,
+    principal: confirmedContribution.principal,
+    reconciliation: movement(1_000_000n, 1_100_000n, [confirmedContribution.principal]),
+  }),
+  unmatchedContributionEvidence: Object.freeze({
+    evidence: contribution,
+    match: unmatchedContributionMatch,
+    principal: createConfirmedContributionPrincipal(contribution, unmatchedContributionMatch),
+    reconciliation: movement(1_000_000n, 1_100_000n, []),
+  }),
+  candidateContributionEvidence: Object.freeze({
+    evidence: contribution,
+    match: candidateContributionMatch,
+    principal: createConfirmedContributionPrincipal(contribution, candidateContributionMatch),
+    reconciliation: movement(1_000_000n, 1_100_000n, []),
+  }),
+  crossAccountConfirmedAttempt: Object.freeze({
+    evidence: contribution,
+    match: match('cross-account-contribution-1', 'confirmed', false),
   }),
   marketOnlyGain: movement(1_000_000n, 1_050_000n, []),
-  mixedContributionAndGain: movement(1_000_000n, 1_130_000n, [contribution, withdrawal]),
+  mixedContributionAndGain: Object.freeze({
+    evidence: Object.freeze([contribution, withdrawal]),
+    matches: Object.freeze([confirmedContribution.match, confirmedWithdrawal.match]),
+    principals: Object.freeze([confirmedContribution.principal, confirmedWithdrawal.principal]),
+    reconciliation: movement(1_000_000n, 1_130_000n, [
+      confirmedContribution.principal,
+      confirmedWithdrawal.principal,
+    ]),
+  }),
   withdrawal: Object.freeze({
     evidence: withdrawal,
-    reconciliation: movement(1_000_000n, 980_000n, [withdrawal]),
+    match: confirmedWithdrawal.match,
+    principal: confirmedWithdrawal.principal,
+    reconciliation: movement(1_000_000n, 980_000n, [confirmedWithdrawal.principal]),
   }),
   brokerageCashIncluded: valuationOnly,
   brokerageCashExcludedAggregated: excludedCashSnapshot(false),
@@ -206,11 +281,18 @@ export const PORTFOLIO_CONTRACT_FIXTURES = Object.freeze({
     revised: includedCashSnapshot({ revision: revision('valuation-1', 'r2') }),
   }),
   cursorReplay: Object.freeze({ cursor: duplicateCursor, replay: duplicateCursor }),
-  holdingsTotalMismatch: includedCashSnapshot({
-    holdings: {
-      completeness: 'complete',
-      items: holdings(parseInstant('2026-09-15T18:00:00Z'), 970_000n),
-    },
+  holdingsTotalMismatch,
+  materialHoldingsMismatch: Object.freeze({
+    snapshot: holdingsTotalMismatch,
+    reconciliation: reconcileHoldings(holdingsTotalMismatch, eur(9_999n)),
+  }),
+  withinRoundingHoldings: Object.freeze({
+    snapshot: holdingsTotalMismatch,
+    reconciliation: reconcileHoldings(holdingsTotalMismatch, eur(10_000n)),
+  }),
+  unavailableHoldingsDetail: Object.freeze({
+    snapshot: holdingsUnavailable,
+    reconciliation: reconcileHoldings(holdingsUnavailable, eur(1n)),
   }),
   providerPlDisagreement: Object.freeze({
     derivedMarketMovement: eur(50_000n),
