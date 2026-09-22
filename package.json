@@ -19,6 +19,7 @@
     "db:check": "pnpm --filter @personal-cfo/data run db:check",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "synthetic:import": "pnpm --filter @personal-cfo/worker run cli:synthetic-import",
+    "sharesight:sync": "pnpm --filter @personal-cfo/worker run cli:sharesight-sync",
     "admin:create-user": "pnpm --filter @personal-cfo/worker run cli:create-user",
     "lint": "eslint . && node scripts/check-package-boundaries.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json && pnpm -r --if-present run typecheck",

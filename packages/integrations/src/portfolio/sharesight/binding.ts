@@ -35,9 +35,12 @@ import {
   type SharesightSnapshotContext,
   type SharesightSnapshotNormalization,
   type SharesightTrade,
+  type SharesightTradeEvidence,
   type SharesightValuation,
   type SharesightValuationCashAccount,
+  type SharesightPayoutEvidence,
 } from './types.js';
+import type { ProviderProfitLoss } from '../types.js';
 
 const EXACT_NUMBER_KEY = '__sharesight_exact_number__';
 const DECIMAL_PATTERN = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?$/u;
@@ -599,6 +602,89 @@ export function normalizeSharesightCashTransaction(
     ]),
   });
   return Object.freeze({ status: 'normalized', evidence });
+}
+
+export function normalizeSharesightTrade(
+  trade: SharesightTrade,
+  providerPortfolioId: string,
+): SharesightTradeEvidence {
+  if (trade.portfolioId !== providerPortfolioId) {
+    return invalid('portfolio_mismatch', 'Trade belongs to a different portfolio.');
+  }
+  const providerTradeId = trade.id ?? trade.uniqueIdentifier;
+  if (providerTradeId === null) {
+    return invalid('missing_trade_identity', 'Trade must have a stable provider identity.');
+  }
+  const sourceId = `portfolio:${providerPortfolioId}:trade:${providerTradeId}`;
+  return Object.freeze({
+    providerPortfolioId,
+    providerTradeId,
+    holdingId: trade.holdingId,
+    transactionType: trade.transactionType,
+    effectiveDate: trade.transactionDate,
+    state: trade.state,
+    value: canonicalDecimal(trade.value),
+    brokerage: canonicalDecimal(trade.brokerage),
+    brokerageCurrencyCode: trade.brokerageCurrencyCode,
+    revision: fingerprint(sourceId, [
+      trade.holdingId,
+      trade.transactionType,
+      trade.transactionDate,
+      trade.state,
+      trade.value,
+      trade.brokerage,
+      trade.brokerageCurrencyCode,
+    ]),
+  });
+}
+
+export function normalizeSharesightPayout(
+  payout: SharesightPayout,
+  providerPortfolioId: string,
+): SharesightPayoutEvidence {
+  if (payout.portfolioId !== providerPortfolioId) {
+    return invalid('portfolio_mismatch', 'Payout belongs to a different portfolio.');
+  }
+  const sourceId = `portfolio:${providerPortfolioId}:payout:${payout.id}`;
+  return Object.freeze({
+    providerPortfolioId,
+    providerPayoutId: payout.id,
+    holdingId: payout.holdingId,
+    effectiveDate: payout.paidOn,
+    state: payout.state,
+    amount: canonicalDecimal(payout.amount),
+    currencyCode: payout.currencyCode,
+    revision: fingerprint(sourceId, [
+      payout.holdingId,
+      payout.paidOn,
+      payout.state,
+      payout.amount,
+      payout.currencyCode,
+    ]),
+  });
+}
+
+export function normalizeSharesightPerformance(
+  performance: SharesightPerformance,
+  providerPortfolioId: string,
+  currencyCode: string,
+  periodStart: string,
+  periodEnd: string,
+): ProviderProfitLoss | null {
+  if (performance.portfolioId !== providerPortfolioId) {
+    return invalid('portfolio_mismatch', 'Performance report belongs to a different portfolio.');
+  }
+  if (currencyCode !== 'EUR') return null;
+  return Object.freeze({
+    amount: createNativeReportableAmount(
+      createMoney(decimalToMinor(performance.totalGain, 'Performance total gain'), EUR),
+    ),
+    semantics: 'period',
+    periodStart: parseInstant(periodStart),
+    periodEnd: parseInstant(periodEnd),
+    fxBasis: 'provider_native',
+    authority: 'reconciliation_only',
+  });
 }
 
 function monthEnd(year: number, monthIndex: number): Date {

@@ -15,6 +15,7 @@ await build({
     index: 'src/index.ts',
     'cli/migrate': 'src/cli/migrate.ts',
     'cli/create-user': 'src/cli/create-user.ts',
+    'cli/sharesight-sync': 'src/cli/sharesight-sync.ts',
     'dev/import-synthetic': 'src/dev/import-synthetic.ts',
   },
   outdir: 'dist',

@@ -1,6 +1,6 @@
 # Sharesight Portfolio Provider Binding
 
-Stage 7 is bound to the Sharesight User API V2/V2.1 for the single-owner personal deployment. This is a contract and normalization binding only: it adds no HTTP client, credentials, connection persistence, background synchronization, or provider writes.
+Stage 7 is bound to the Sharesight User API V2/V2.1 for the single-owner personal deployment. Stage 7.1 adds a server-only read client and a manually invoked durable validation sync. It adds no provider writes, background synchronization, or canonical financial activation.
 
 Sharesight is selected because its documented User API can pull portfolio data, its API supports OAuth 2.0 and a sandbox by request, and Sharesight officially supports sanitized Lightyear trade-file imports. The Lightyear connection is a manual CSV import, not a live broker feed. The adapter therefore cannot infer that a fresh Sharesight valuation proves the Lightyear trade history is current.
 
@@ -28,7 +28,7 @@ The personal deployment binds to OAuth 2.0 `client_credentials`, which Sharesigh
 | Provider P/L | `GET /api/v2/portfolios/:id/performance.json` |
 | Distributions | `GET /api/v2/portfolios/:id/payouts.json` |
 
-The documented limit is 360 requests per minute. Valuation, performance, and diversity reports allow three concurrent requests. A `403` with rate-limit headers is a bounded retry case; a concurrent-report `403` waits before retry. `401` initiates one token refresh in the future adapter and then requires reauthentication. Deterministic `400`, access-denied `403`, `412`, and `422` responses are not retried. Network and server failures may retry only idempotent reads.
+The live client keeps tokens only in memory, reuses them with a 60-second expiry margin, and coalesces concurrent token acquisition. The documented limit is 360 requests per minute. Valuation and performance calls use at most three concurrent slots. A `403` with rate-limit evidence is retried with a bounded wait; `401` permits one new client-credentials grant and replay. Deterministic `400`, access-denied `403`, `412`, and `422` responses are not retried. Network, timeout, `408`, `429`, and server failures receive at most three safe-read attempts.
 
 Sharesight documents a sandbox obtainable by request. It does not document a webhook or an incremental transaction cursor, so Stage 7 remains polling-only and `incremental_cursor=false`.
 
@@ -76,6 +76,7 @@ Sharesight documents a sandbox obtainable by request. It does not document a web
 - A stable source ID plus the versioned SHA-256 fingerprint of canonically ordered economic fields is the revision identity. Exact replays retain the fingerprint; corrected fields produce a new fingerprint under the same source ID.
 - Missing IDs do not become deletion facts because Sharesight supplies no deletion tombstone.
 - Sharesight has date filters but no documented provider pagination. Initial/full reconciliation uses deterministic calendar-month application windows encoded as a composite cursor. The cursor is explicitly `sharesight-application-window`, is not sent as provider state, and does not make `incremental_cursor` true.
+- Every manual Stage 7.1 run rescans inception through the current valuation date. Exact source/fingerprint equality is replay; a new fingerprint under the same source is a revision. Missing records never become deletion evidence.
 
 The confirmed contribution key remains provider-neutral. It is derived from owner, canonical bank transfer, canonical investment account, and direction. It never uses the Sharesight transaction ID as economic authority, allowing bank and portfolio observations to converge on one principal flow.
 
@@ -87,6 +88,8 @@ Only the exact cash transaction types `DEPOSIT` and `WITHDRAWAL` can produce `Co
 
 Provider evidence never creates `ConfirmedContributionPrincipal`. Exact money, the correct portfolio account, a canonical transfer ID, and one canonical contribution key remain mandatory through the Stage 7.0.1 constructor.
 
-An EUR total can remain displayable when holdings are partial. A material comparison of complete components emits `valuation_components_mismatch` and suppresses invest-more. Missing holdings detail alone does not suppress an otherwise complete source. Separately, manual Lightyear import freshness is not observable through the API: without independent confirmation the snapshot has `sourceCompleteness=partial`, emits `source_incomplete`, and cannot authorize invest-more.
+An EUR total can remain displayable when holdings are partial. A material comparison of complete components emits `valuation_components_mismatch` and suppresses invest-more. Missing holdings detail alone does not suppress an otherwise complete source. Manual Lightyear import freshness is never promoted by Stage 7.1: snapshots have `sourceCompleteness=partial`, emit `source_incomplete`, use receipt time as the conservative provisional stale boundary, and cannot authorize invest-more.
 
-V3 is excluded because Sharesight documents it as closed beta with shapes that may change without notice. No live provider API call, provider credential, Open Banking behavior, trading action, or Stage 8 feature is part of this binding.
+Run the validation sync with `pnpm sharesight:sync`. Client credentials, the target portfolio, explicit owner/account IDs, and the 32-byte base64 receipt-encryption key come from server environment variables. Raw response ciphertext uses AES-256-GCM and expires after 30 days; hashes and revision metadata remain. No token or credential is persisted or logged.
+
+V3 is excluded because Sharesight documents it as closed beta with shapes that may change without notice. Live sandbox/production credentials are not required by CI. Canonical valuation activation, automatic transfer matching, provider writes, Open Banking, trading, scheduling, and Stage 8 remain outside Stage 7.1.

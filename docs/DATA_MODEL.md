@@ -116,6 +116,8 @@ The accepted Sharesight binding uses decimal-string `portfolio.id` as provider a
 
 Sharesight supplies a valuation date rather than an exact valuation instant. The binding derives a conservative local start-of-day `sourceAsOf` from that date and the explicitly mapped portfolio timezone, while retaining `receivedAt` separately. Unknown timezone mappings are quarantined. Manual Lightyear trade-file freshness is not observable through the API; an unconfirmed import state produces partial source completeness even when the Sharesight total itself is available.
 
+Stage 7.1 adds `SharesightSyncState`, `SharesightSyncRun`, `SharesightRawReceipt`, and `SharesightSourceRevision`. They are operational/evidence records, not canonical finance. Sync state fixes one provider portfolio to an explicit owner and EUR investment account and holds a bounded lease. A response is AES-256-GCM receipted before decoding; ciphertext expires after 30 days. Stable source IDs and fingerprints preserve replay/revision history without interpreting absence as deletion. Stage 7.1 writes neither `PortfolioValuation` nor `InvestmentContribution`.
+
 Holdings are components and reconciliation evidence, not independent accounts or an alternate wealth source. Investment return for a period is derived from portfolio value changes adjusted for confirmed contributions, explicit withdrawals, and FX. Provider-reported P/L and contributed-capital aggregates are retained for reconciliation but do not override canonical principal or the engine. Brokerage cash enters Net Worth through exactly one declared projection, never both the portfolio total and a separate account.
 
 ### Refunds and Reimbursements

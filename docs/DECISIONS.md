@@ -388,6 +388,18 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Stage 7 becomes `READY_FOR_PROVIDER_ADAPTER`, not implemented. The later adapter may use OAuth 2.0 client credentials for the linked personal account and polling over deterministic application-owned date windows. Manual Lightyear CSV upkeep remains an operator responsibility; without independent freshness confirmation, snapshots are partial and cannot authorize invest-more. Provider totals may still be displayed, holdings remain reconciliation evidence, non-EUR authoritative facts remain quarantined pending the FX decision, and no trading or provider write is authorized.
 
+## ADR-034 — Durable Manual Sharesight Validation Sync
+
+**Status:** Accepted — 2026-09-22
+
+**Decision:** Stage 7.1 uses a server-only OAuth client-credentials adapter and an explicitly invoked manual sync. Every provider response is encrypted with AES-256-GCM and committed before decoding. A lease-backed run records deterministic full-history monthly continuation, while stable source IDs and SHA-256 fingerprints distinguish new, replayed, and revised evidence. Raw ciphertext expires after 30 days. Credentials and access tokens remain environment/in-memory only. Stage 7.1 persists operational evidence but does not write canonical portfolio valuations, confirmed principal, input versions, or recalculation jobs.
+
+**Reasoning:** Sharesight exposes no provider cursor, correction feed, deletion tombstone, or Lightyear-import freshness marker. Full rescans are the only deterministic way to observe historical revisions, and a durable pre-normalization receipt is required for crash auditability. Canonical activation before live response validation would bypass completeness/readiness information that the existing canonical valuation table cannot yet represent.
+
+**Alternatives:** An in-memory-only adapter cannot prove replay behavior across restarts. Incremental-only polling misses historical corrections. Treating a fresh Sharesight response as proof of a fresh manual Lightyear import would invent authority. Writing directly into existing canonical tables would make partial evidence economically active before the required readiness projection exists.
+
+**Consequences:** Stage 7 becomes `READY_FOR_LIVE_PROVIDER_VALIDATION`. Operators run `pnpm sharesight:sync`; no cron, queue, webhook, or worker lifecycle hook is added. Every run rescans portfolio inception through the valuation date. Missing records never delete history. All Stage 7.1 snapshots remain `source_incomplete` until a later auditable freshness workflow, and provider contribution evidence still requires deterministic bank-transfer confirmation before principal exists.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

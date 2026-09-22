@@ -23,6 +23,8 @@ import {
   decodeSharesightTrades,
   decodeSharesightValuation,
   normalizeSharesightCashTransaction,
+  normalizeSharesightPayout,
+  normalizeSharesightTrade,
   normalizeSharesightValuation,
   reconcileHoldings,
   serializePortfolioCursor,
@@ -245,9 +247,28 @@ describe('Sharesight Stage 7 provider binding', () => {
   it('does not treat an unconfirmed trade as settled contribution evidence', () => {
     const trade = decodeSharesightTrades(SHARESIGHT_CONTRACT_FIXTURES.pendingTrade)[0]!;
     expect(trade).toMatchObject({ id: null, state: 'unconfirmed', transactionType: 'BUY' });
+    expect(normalizeSharesightTrade(trade, '293304')).toMatchObject({
+      providerTradeId: 'pending-trade-1',
+      state: 'unconfirmed',
+      value: '100',
+    });
     expect(SHARESIGHT_PROVIDER_BINDING.fieldClassifications['brokerageSettlementState']).toBe(
       'AMBIGUOUS',
     );
+  });
+
+  it('normalizes payouts as revisioned provider evidence rather than principal', () => {
+    const payout = normalizeSharesightPayout(
+      decodeSharesightPayouts(SHARESIGHT_CONTRACT_FIXTURES.payouts)[0]!,
+      '293304',
+    );
+    expect(payout).toMatchObject({
+      providerPayoutId: '2',
+      state: 'confirmed',
+      amount: '42.3',
+      currencyCode: 'EUR',
+    });
+    expect(payout).not.toHaveProperty('authority');
   });
 
   it('uses derived monthly continuation without claiming a provider cursor', () => {

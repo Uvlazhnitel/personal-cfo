@@ -7,6 +7,9 @@ import type {
   PortfolioOwnerId,
   PortfolioSnapshot,
   ContributionEvidence,
+  PortfolioWarningCode,
+  ProviderProfitLoss,
+  ProviderRevisionIdentity,
 } from '../types.js';
 
 export const SHARESIGHT_PROVIDER_ID = 'sharesight';
@@ -179,4 +182,88 @@ export type SharesightProviderBinding = Readonly<{
   capabilities: PortfolioCapabilities;
   fieldClassifications: Readonly<Record<string, SharesightFieldClassification>>;
   endpoints: Readonly<Record<string, string>>;
+}>;
+
+export type SharesightClock = Readonly<{ now: () => Date }>;
+export type SharesightSleeper = (milliseconds: number, signal?: AbortSignal) => Promise<void>;
+export type SharesightFetch = (input: string, init: RequestInit) => Promise<Response>;
+export type SharesightTransport = SharesightFetch;
+
+export type SharesightApiErrorCategory =
+  | 'configuration'
+  | 'authentication'
+  | 'authorization'
+  | 'rate_limited'
+  | 'timeout'
+  | 'transient_provider_failure'
+  | 'invalid_request'
+  | 'invalid_response';
+
+export type SharesightAccessToken = Readonly<{
+  value: string;
+  expiresAtMilliseconds: number;
+}>;
+
+export type SharesightRawResponse<T> = Readonly<{
+  body: string;
+  value: T;
+  receivedAt: Instant;
+  receiptId: string | null;
+  holdingLimitTotal: string | null;
+  holdingLimitReason: string | null;
+}>;
+
+export type SharesightRawResponseSink = (
+  response: Readonly<{
+    path: string;
+    body: string;
+    receivedAt: Instant;
+  }>,
+) => Promise<string>;
+
+export type SharesightTradeEvidence = Readonly<{
+  providerPortfolioId: string;
+  providerTradeId: string;
+  holdingId: string;
+  transactionType: string;
+  effectiveDate: string;
+  state: 'confirmed' | 'unconfirmed' | 'rejected';
+  value: string;
+  brokerage: string;
+  brokerageCurrencyCode: string;
+  revision: ProviderRevisionIdentity;
+}>;
+
+export type SharesightPayoutEvidence = Readonly<{
+  providerPortfolioId: string;
+  providerPayoutId: string;
+  holdingId: string;
+  effectiveDate: string;
+  state: 'confirmed' | 'unconfirmed' | 'rejected';
+  amount: string;
+  currencyCode: string;
+  revision: ProviderRevisionIdentity;
+}>;
+
+export type SharesightRevisionDisposition = 'new' | 'replay' | 'revision';
+
+export type SharesightSyncCounts = Readonly<{
+  new: number;
+  replay: number;
+  revision: number;
+  quarantined: number;
+  ignored: number;
+}>;
+
+export type SharesightSyncResult = Readonly<{
+  status: 'completed';
+  snapshot: PortfolioSnapshot | null;
+  contributions: readonly ContributionEvidence[];
+  trades: readonly SharesightTradeEvidence[];
+  payouts: readonly SharesightPayoutEvidence[];
+  providerProfitLoss: readonly ProviderProfitLoss[];
+  warnings: readonly PortfolioWarningCode[];
+  counts: SharesightSyncCounts;
+  sourceFreshness: 'unconfirmed';
+  confirmedPrincipalsCreated: 0;
 }>;

@@ -12,5 +12,6 @@ export * from './migrations.js';
 export * from './owner-lock.js';
 export * from './owners.js';
 export * from './schema.js';
+export * from './sharesight.js';
 export * from './telegram.js';
 export * from './uuid-v7.js';

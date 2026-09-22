@@ -1,8 +1,8 @@
 # Provider-Neutral Portfolio Contract
 
-This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.0.2 binds the first adapter to Sharesight without adding live synchronization; the verified provider mapping is in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
+This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.1 implements the first server-only Sharesight read adapter and a durable manual validation sync; the verified provider mapping is in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
 
-Stage 7 contract readiness is `READY_FOR_PROVIDER_ADAPTER`. Sharesight User API V2/V2.1 is the selected provider for the single-owner deployment. This status authorizes implementing the later read-only adapter; it does not mean HTTP, credential persistence, synchronization jobs, or canonical portfolio persistence exist.
+Stage 7 contract readiness is `READY_FOR_LIVE_PROVIDER_VALIDATION`. Sharesight User API V2/V2.1 is the selected provider and the HTTP/OAuth boundary is implemented. Only encrypted receipts and safe revision/run state are persisted. Provider evidence is not yet activated in canonical portfolio tables, and no scheduled synchronization exists.
 
 ## Terminology and authority
 
