@@ -86,7 +86,7 @@ export type SharesightTrade = Readonly<{
   state: 'confirmed' | 'unconfirmed' | 'rejected';
   value: SharesightExactNumber;
   brokerage: SharesightExactNumber;
-  brokerageCurrencyCode: string;
+  brokerageCurrencyCode: string | null;
 }>;
 
 export type SharesightPerformance = Readonly<{
@@ -102,7 +102,7 @@ export type SharesightPerformance = Readonly<{
 }>;
 
 export type SharesightPayout = Readonly<{
-  id: string;
+  id: string | null;
   portfolioId: string;
   holdingId: string;
   paidOn: string;
@@ -230,7 +230,7 @@ export type SharesightTradeEvidence = Readonly<{
   state: 'confirmed' | 'unconfirmed' | 'rejected';
   value: string;
   brokerage: string;
-  brokerageCurrencyCode: string;
+  brokerageCurrencyCode: string | null;
   revision: ProviderRevisionIdentity;
 }>;
 
@@ -244,6 +244,20 @@ export type SharesightPayoutEvidence = Readonly<{
   currencyCode: string;
   revision: ProviderRevisionIdentity;
 }>;
+
+export type SharesightTradeNormalization =
+  | Readonly<{ status: 'normalized'; evidence: SharesightTradeEvidence }>
+  | Readonly<{
+      status: 'quarantined';
+      category: 'sharesight_trade_identity_unavailable';
+    }>;
+
+export type SharesightPayoutNormalization =
+  | Readonly<{ status: 'normalized'; evidence: SharesightPayoutEvidence }>
+  | Readonly<{
+      status: 'quarantined';
+      category: 'sharesight_payout_identity_unavailable';
+    }>;
 
 export type SharesightRevisionDisposition = 'new' | 'replay' | 'revision';
 

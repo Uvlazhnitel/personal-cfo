@@ -110,6 +110,20 @@ describe('Sharesight Stage 7 provider binding', () => {
     expect(payout).toMatchObject({ id: '2', amount: '42.30', state: 'confirmed' });
   });
 
+  it('decodes the direct-root performance shape observed in the live sandbox', () => {
+    const performance = decodeSharesightPerformance(
+      SHARESIGHT_CONTRACT_FIXTURES.observedDirectPerformance,
+    );
+
+    expect(performance).toMatchObject({
+      reportId: 'PerformanceReport_293304',
+      portfolioId: '293304',
+      startDate: '2026-01-01',
+      endDate: '2026-09-21',
+      totalGain: '555.40',
+    });
+  });
+
   it('normalizes an EUR valuation as an included-cash authoritative total', () => {
     const snapshot = normalizedSnapshot();
     expect(snapshot.providerPortfolioId).toBe('293304');
@@ -248,9 +262,12 @@ describe('Sharesight Stage 7 provider binding', () => {
     const trade = decodeSharesightTrades(SHARESIGHT_CONTRACT_FIXTURES.pendingTrade)[0]!;
     expect(trade).toMatchObject({ id: null, state: 'unconfirmed', transactionType: 'BUY' });
     expect(normalizeSharesightTrade(trade, '293304')).toMatchObject({
-      providerTradeId: 'pending-trade-1',
-      state: 'unconfirmed',
-      value: '100',
+      status: 'normalized',
+      evidence: {
+        providerTradeId: 'pending-trade-1',
+        state: 'unconfirmed',
+        value: '100',
+      },
     });
     expect(SHARESIGHT_PROVIDER_BINDING.fieldClassifications['brokerageSettlementState']).toBe(
       'AMBIGUOUS',
@@ -263,12 +280,35 @@ describe('Sharesight Stage 7 provider binding', () => {
       '293304',
     );
     expect(payout).toMatchObject({
-      providerPayoutId: '2',
-      state: 'confirmed',
-      amount: '42.3',
-      currencyCode: 'EUR',
+      status: 'normalized',
+      evidence: {
+        providerPayoutId: '2',
+        state: 'confirmed',
+        amount: '42.3',
+        currencyCode: 'EUR',
+      },
     });
     expect(payout).not.toHaveProperty('authority');
+  });
+
+  it('quarantines observed unconfirmed records that lack stable provider identities', () => {
+    const trade = decodeSharesightTrades(
+      SHARESIGHT_CONTRACT_FIXTURES.observedIdentitylessTrade,
+    )[0]!;
+    const payout = decodeSharesightPayouts(
+      SHARESIGHT_CONTRACT_FIXTURES.observedIdentitylessPayout,
+    )[0]!;
+
+    expect(trade.brokerageCurrencyCode).toBeNull();
+    expect(normalizeSharesightTrade(trade, '293304')).toEqual({
+      status: 'quarantined',
+      category: 'sharesight_trade_identity_unavailable',
+    });
+    expect(payout.id).toBeNull();
+    expect(normalizeSharesightPayout(payout, '293304')).toEqual({
+      status: 'quarantined',
+      category: 'sharesight_payout_identity_unavailable',
+    });
   });
 
   it('uses derived monthly continuation without claiming a provider cursor', () => {

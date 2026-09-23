@@ -21,7 +21,7 @@ const suite = databaseUrl === undefined ? describe.skip : describe;
 suite('authenticated browser boundaries', () => {
   let context: DatabaseContext;
   const origin = 'http://127.0.0.1:8080';
-  const now = new Date('2026-09-16T08:00:00Z');
+  const now = new Date();
   const clock = { now: () => now };
   let session: NonNullable<Awaited<ReturnType<typeof authenticate>>>;
 
@@ -134,7 +134,7 @@ suite('authenticated browser boundaries', () => {
       clock,
     );
     if (replacement === null) throw new Error('Replacement session setup failed.');
-    const expiredClock = { now: () => new Date('2026-09-23T08:00:01Z') };
+    const expiredClock = { now: () => new Date(now.getTime() + 7 * 24 * 60 * 60 * 1_000 + 1) };
     expect(
       await loadAuthorizedDebugOverview(context.db, replacement.sessionToken, expiredClock),
     ).toEqual({ status: 'unauthorized' });

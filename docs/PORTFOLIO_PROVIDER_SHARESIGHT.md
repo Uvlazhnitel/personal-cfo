@@ -93,3 +93,27 @@ An EUR total can remain displayable when holdings are partial. A material compar
 Run the validation sync with `pnpm sharesight:sync`. Client credentials, the target portfolio, explicit owner/account IDs, and the 32-byte base64 receipt-encryption key come from server environment variables. Raw response ciphertext uses AES-256-GCM and expires after 30 days; hashes and revision metadata remain. No token or credential is persisted or logged.
 
 V3 is excluded because Sharesight documents it as closed beta with shapes that may change without notice. Live sandbox/production credentials are not required by CI. Canonical valuation activation, automatic transfer matching, provider writes, Open Banking, trading, scheduling, and Stage 8 remain outside Stage 7.1.
+
+## Observed live Sharesight behavior
+
+The Stage 7.1.1 sandbox validation on 2026-09-23 used local-only credentials and retained no token or plaintext response outside the encrypted receipt boundary. The classifications below distinguish observed facts from the existing documented contract.
+
+| Behavior | Classification | Validation result |
+| --- | --- | --- |
+| OAuth client credentials | OBSERVED | The sandbox token endpoint returned a bearer token with a 1,800-second lifetime. |
+| API versions | OBSERVED | The same authorization exposed both V2 and V3 portfolio discovery. V3 remains excluded because availability does not make its closed-beta shapes stable. |
+| API origin | OBSERVED | The provisioned sandbox application used the HTTPS origin supplied in its OAuth metadata rather than the production default. |
+| V2/V2.1 reads | OBSERVED | Portfolio discovery, valuation, holdings, cash accounts, trades, payouts, and performance returned successful read-only responses. |
+| Performance shape | OBSERVED | The V2 performance report was returned directly at the JSON root, without a `portfolio_performance` wrapper. The decoder accepts both documented fixture and observed forms. |
+| Trade identity | OBSERVED | Confirmed trades had stable IDs. Some unconfirmed trades had both `id` and `unique_identifier` null and a null brokerage currency; these records are retained in the encrypted receipt and quarantined rather than assigned a derived identity. |
+| Payout identity | OBSERVED | Observed unconfirmed payouts had null IDs. They are retained in the encrypted receipt and quarantined; no source revision is invented. |
+| Exact numbers | OBSERVED | Holdings and reports used ordinary integer and decimal JSON tokens, including multiple fractional scales. Exact lexical decoding remained valid without financial floating-point arithmetic. |
+| Replay identity | OBSERVED | Repeated unchanged syncs produced replay dispositions and no new source revision. Stable valuation and holding IDs were also observed across repeated reads. |
+| Portfolio currencies | OBSERVED | Exactly one discovered portfolio was EUR and therefore eligible for the current binding. A non-EUR portfolio was useful for DTO validation but remains outside canonical activation. |
+| Holdings and cash reconciliation | AMBIGUOUS | The eligible EUR portfolio contained no holdings or cash accounts. A non-EUR portfolio exposed holdings but no cash component, so live validation did not independently prove the included-in-total cash assumption or material-mismatch behavior. |
+| Contributions and withdrawals | UNAVAILABLE | No sandbox cash-account `DEPOSIT` or `WITHDRAWAL` record was present. Contribution normalization remains fixture- and contract-tested but is `NOT_OBSERVED_LIVE`. |
+| Provider correction/revision | UNAVAILABLE | No naturally revised source record was present. Revision replacement remains deterministically tested but is `NOT_OBSERVED_LIVE`. |
+| VGLA | UNAVAILABLE | No holding with symbol VGLA was present in either accessible portfolio: `VGLA_NOT_PRESENT`. No listing equivalence was inferred. |
+| Lightyear import freshness | AMBIGUOUS | No response added an independent brokerage-import freshness signal. `sourceCompleteness=partial`, `source_incomplete`, and recommendation suppression remain unchanged. |
+
+The resulting readiness is `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`. It authorizes further read-only sync work, not canonical activation or invest-more recommendations. Live contribution identity, included-cash reconciliation, VGLA listing identity, and natural revision behavior still require representative provider data.

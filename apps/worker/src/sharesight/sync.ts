@@ -470,13 +470,23 @@ export async function executeSharesightSync(
           options.signal,
         );
         if (response.receiptId === null) throw new Error('Sharesight receipt sink was not used.');
-        const evidence = response.value.map((item) => normalizeSharesightTrade(item, portfolio.id));
+        const evidence = [] as SharesightSyncResult['trades'][number][];
+        let quarantined = false;
+        for (const item of response.value) {
+          const normalized = normalizeSharesightTrade(item, portfolio.id);
+          if (normalized.status === 'normalized') evidence.push(normalized.evidence);
+          else {
+            quarantined = true;
+            counts.quarantined += 1;
+          }
+        }
         trades.push(...evidence);
         await finalize(
           response.receiptId,
           evidence.map((item) => revision(item.revision, 'trade')),
-          'normalized',
+          quarantined ? 'quarantined' : 'normalized',
           window.cursor.kind === 'composite' ? window.cursor.value : null,
+          quarantined ? 'sharesight_trade_record_quarantined' : null,
         );
       } else {
         const response = await client.listPayouts(
@@ -486,15 +496,23 @@ export async function executeSharesightSync(
           options.signal,
         );
         if (response.receiptId === null) throw new Error('Sharesight receipt sink was not used.');
-        const evidence = response.value.map((item) =>
-          normalizeSharesightPayout(item, portfolio.id),
-        );
+        const evidence = [] as SharesightSyncResult['payouts'][number][];
+        let quarantined = false;
+        for (const item of response.value) {
+          const normalized = normalizeSharesightPayout(item, portfolio.id);
+          if (normalized.status === 'normalized') evidence.push(normalized.evidence);
+          else {
+            quarantined = true;
+            counts.quarantined += 1;
+          }
+        }
         payouts.push(...evidence);
         await finalize(
           response.receiptId,
           evidence.map((item) => revision(item.revision, 'payout')),
-          'normalized',
+          quarantined ? 'quarantined' : 'normalized',
           window.cursor.kind === 'composite' ? window.cursor.value : null,
+          quarantined ? 'sharesight_payout_record_quarantined' : null,
         );
       }
     }

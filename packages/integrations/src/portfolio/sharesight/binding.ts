@@ -39,6 +39,8 @@ import {
   type SharesightValuation,
   type SharesightValuationCashAccount,
   type SharesightPayoutEvidence,
+  type SharesightPayoutNormalization,
+  type SharesightTradeNormalization,
 } from './types.js';
 import type { ProviderProfitLoss } from '../types.js';
 
@@ -357,7 +359,10 @@ function parseTrade(value: unknown): SharesightTrade {
     state: parseState(item['state'], 'Trade'),
     value: numericSource(item['value'], 'Trade value'),
     brokerage: numericSource(item['brokerage'], 'Trade brokerage'),
-    brokerageCurrencyCode: string(item['brokerage_currency_code'], 'Trade brokerage currency'),
+    brokerageCurrencyCode:
+      item['brokerage_currency_code'] === null
+        ? null
+        : string(item['brokerage_currency_code'], 'Trade brokerage currency'),
   });
 }
 
@@ -368,7 +373,10 @@ export function decodeSharesightTrades(rawJson: string): readonly SharesightTrad
 
 export function decodeSharesightPerformance(rawJson: string): SharesightPerformance {
   const root = record(parseExactJson(rawJson), 'Performance response');
-  const report = record(root['portfolio_performance'], 'Portfolio performance');
+  const report =
+    root['portfolio_performance'] === undefined
+      ? root
+      : record(root['portfolio_performance'], 'Portfolio performance');
   return Object.freeze({
     reportId: string(report['id'], 'Performance report ID'),
     portfolioId: providerId(report['portfolio_id'], 'Performance portfolio ID'),
@@ -385,7 +393,7 @@ export function decodeSharesightPerformance(rawJson: string): SharesightPerforma
 function parsePayout(value: unknown): SharesightPayout {
   const item = record(value, 'Payout');
   return Object.freeze({
-    id: providerId(item['id'], 'Payout ID'),
+    id: nullableProviderId(item['id'], 'Payout ID'),
     portfolioId: providerId(item['portfolio_id'], 'Payout portfolio ID'),
     holdingId: providerId(item['holding_id'], 'Payout holding ID'),
     paidOn: parseDate(item['paid_on'], 'Payout date'),
@@ -607,16 +615,19 @@ export function normalizeSharesightCashTransaction(
 export function normalizeSharesightTrade(
   trade: SharesightTrade,
   providerPortfolioId: string,
-): SharesightTradeEvidence {
+): SharesightTradeNormalization {
   if (trade.portfolioId !== providerPortfolioId) {
     return invalid('portfolio_mismatch', 'Trade belongs to a different portfolio.');
   }
   const providerTradeId = trade.id ?? trade.uniqueIdentifier;
   if (providerTradeId === null) {
-    return invalid('missing_trade_identity', 'Trade must have a stable provider identity.');
+    return Object.freeze({
+      status: 'quarantined',
+      category: 'sharesight_trade_identity_unavailable',
+    });
   }
   const sourceId = `portfolio:${providerPortfolioId}:trade:${providerTradeId}`;
-  return Object.freeze({
+  const evidence: SharesightTradeEvidence = Object.freeze({
     providerPortfolioId,
     providerTradeId,
     holdingId: trade.holdingId,
@@ -633,20 +644,27 @@ export function normalizeSharesightTrade(
       trade.state,
       trade.value,
       trade.brokerage,
-      trade.brokerageCurrencyCode,
+      trade.brokerageCurrencyCode ?? '',
     ]),
   });
+  return Object.freeze({ status: 'normalized', evidence });
 }
 
 export function normalizeSharesightPayout(
   payout: SharesightPayout,
   providerPortfolioId: string,
-): SharesightPayoutEvidence {
+): SharesightPayoutNormalization {
   if (payout.portfolioId !== providerPortfolioId) {
     return invalid('portfolio_mismatch', 'Payout belongs to a different portfolio.');
   }
+  if (payout.id === null) {
+    return Object.freeze({
+      status: 'quarantined',
+      category: 'sharesight_payout_identity_unavailable',
+    });
+  }
   const sourceId = `portfolio:${providerPortfolioId}:payout:${payout.id}`;
-  return Object.freeze({
+  const evidence: SharesightPayoutEvidence = Object.freeze({
     providerPortfolioId,
     providerPayoutId: payout.id,
     holdingId: payout.holdingId,
@@ -662,6 +680,7 @@ export function normalizeSharesightPayout(
       payout.currencyCode,
     ]),
   });
+  return Object.freeze({ status: 'normalized', evidence });
 }
 
 export function normalizeSharesightPerformance(

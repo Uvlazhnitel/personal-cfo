@@ -220,6 +220,7 @@ suite('Sharesight durable read-only synchronization', () => {
     );
     let tokenCalls = 0;
     let includeDeposit = true;
+    let identitylessUnconfirmedRecords = false;
     const fetchImplementation = (input: string): Promise<Response> => {
       if (input.endsWith('/oauth2/token')) {
         tokenCalls += 1;
@@ -241,13 +242,25 @@ suite('Sharesight durable read-only synchronization', () => {
         return Promise.resolve(response(SHARESIGHT_CONTRACT_FIXTURES.cashAccounts));
       }
       if (input.includes('/trades.json')) {
-        return Promise.resolve(response(SHARESIGHT_CONTRACT_FIXTURES.pendingTrade));
+        return Promise.resolve(
+          response(
+            identitylessUnconfirmedRecords
+              ? SHARESIGHT_CONTRACT_FIXTURES.observedIdentitylessTrade
+              : SHARESIGHT_CONTRACT_FIXTURES.pendingTrade,
+          ),
+        );
       }
       if (input.includes('/payouts.json')) {
-        return Promise.resolve(response(SHARESIGHT_CONTRACT_FIXTURES.payouts));
+        return Promise.resolve(
+          response(
+            identitylessUnconfirmedRecords
+              ? SHARESIGHT_CONTRACT_FIXTURES.observedIdentitylessPayout
+              : SHARESIGHT_CONTRACT_FIXTURES.payouts,
+          ),
+        );
       }
       if (input.includes('/performance.json')) {
-        return Promise.resolve(response(SHARESIGHT_CONTRACT_FIXTURES.performance));
+        return Promise.resolve(response(SHARESIGHT_CONTRACT_FIXTURES.observedDirectPerformance));
       }
       return Promise.resolve(response(portfolios));
     };
@@ -289,7 +302,18 @@ suite('Sharesight durable read-only synchronization', () => {
       clock,
     });
     expect(withoutDeposit.contributions).toHaveLength(0);
-    expect(tokenCalls).toBe(3);
+    identitylessUnconfirmedRecords = true;
+    const quarantinedIdentityless = await executeSharesightSync(context.db, configuration, {
+      fetchImplementation,
+      clock,
+    });
+    expect(quarantinedIdentityless).toMatchObject({
+      status: 'completed',
+      trades: [],
+      payouts: [],
+    });
+    expect(quarantinedIdentityless.counts.quarantined).toBeGreaterThan(0);
+    expect(tokenCalls).toBe(4);
     const retainedContribution = await context.db.query.sharesightSourceRevisions.findFirst({
       where: eq(sharesightSourceRevisions.sourceId, 'portfolio:293304:cash:754797206:798669676'),
     });
@@ -302,7 +326,7 @@ suite('Sharesight durable read-only synchronization', () => {
       (await context.db.select({ value: count() }).from(investmentContributions))[0]?.value,
     ).toBe(0);
     const runs = await context.db.select().from(sharesightSyncRuns);
-    expect(runs.filter((run) => run.providerPortfolioId === '293304')).toHaveLength(3);
+    expect(runs.filter((run) => run.providerPortfolioId === '293304')).toHaveLength(4);
     expect(runs.every((run) => run.status === 'completed')).toBe(true);
   });
 

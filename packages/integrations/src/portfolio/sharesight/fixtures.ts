@@ -125,6 +125,26 @@ export const SHARESIGHT_CONTRACT_FIXTURES = Object.freeze({
       }
     ]
   }`,
+  observedIdentitylessTrade: `{
+    "trades": [
+      {
+        "id": null,
+        "unique_identifier": null,
+        "transaction_type": "BUY",
+        "transaction_date": "2026-09-21",
+        "quantity": 1.25,
+        "price": 80.00,
+        "exchange_rate": 1.0,
+        "brokerage": 0,
+        "brokerage_currency_code": null,
+        "value": 100.00,
+        "portfolio_id": 293304,
+        "holding_id": 6257909,
+        "instrument_id": 429,
+        "state": "unconfirmed"
+      }
+    ]
+  }`,
   performance: `{
     "portfolio_performance": {
       "id": "PerformanceReport_293304",
@@ -137,6 +157,31 @@ export const SHARESIGHT_CONTRACT_FIXTURES = Object.freeze({
       "total_gain": 555.40,
       "start_date": "2026-01-01",
       "end_date": "2026-09-21"
+    }
+  }`,
+  observedDirectPerformance: `{
+    "id": "PerformanceReport_293304",
+    "portfolio_id": 293304,
+    "grouping": "market",
+    "custom_group_id": null,
+    "include_sales": true,
+    "value": 10000.10,
+    "capital_gain": 525.20,
+    "capital_gain_percent": 5.25,
+    "payout_gain": 42.30,
+    "payout_gain_percent": 0.42,
+    "currency_gain": -12.10,
+    "currency_gain_percent": -0.12,
+    "total_gain": 555.40,
+    "total_gain_percent": 5.55,
+    "start_date": "2026-01-01",
+    "end_date": "2026-09-21",
+    "holdings": [],
+    "cash_accounts": [],
+    "sub_totals": [],
+    "links": {
+      "portfolio": "/api/v2/portfolios/293304",
+      "self": "/api/v2/portfolios/293304/performance"
     }
   }`,
   payouts: `{
@@ -154,6 +199,24 @@ export const SHARESIGHT_CONTRACT_FIXTURES = Object.freeze({
         "currency": "EUR",
         "exchange_rate": 1.0,
         "state": "confirmed"
+      }
+    ]
+  }`,
+  observedIdentitylessPayout: `{
+    "payouts": [
+      {
+        "id": null,
+        "portfolio_id": 293304,
+        "holding_id": 6257909,
+        "instrument_id": 429,
+        "symbol": "SYN",
+        "market": "XETR",
+        "paid_on": "2026-09-18",
+        "goes_ex_on": "2026-09-10",
+        "amount": 42.30,
+        "currency": "EUR",
+        "exchange_rate": 1.0,
+        "state": "unconfirmed"
       }
     ]
   }`,

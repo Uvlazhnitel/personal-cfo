@@ -400,6 +400,8 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** Stage 7 becomes `READY_FOR_LIVE_PROVIDER_VALIDATION`. Operators run `pnpm sharesight:sync`; no cron, queue, webhook, or worker lifecycle hook is added. Every run rescans portfolio inception through the valuation date. Missing records never delete history. All Stage 7.1 snapshots remain `source_incomplete` until a later auditable freshness workflow, and provider contribution evidence still requires deterministic bank-transfer confirmation before principal exists.
 
+**Live validation clarification — 2026-09-23:** The provisioned sandbox exposed the accepted V2/V2.1 endpoints as well as V3 portfolio discovery, so the stable binding remains V2/V2.1. Live V2 performance responses place the report directly at the response root. Some unconfirmed trades and payouts expose no stable provider ID; those observations remain encrypted receipt evidence and are quarantined rather than assigned application-invented source identities. Repeated eligible-portfolio syncs proved replay stability and zero canonical activation. The sandbox did not contain cash contributions, withdrawals, VGLA, cash components, or a naturally revised record, so the stage advances only to `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

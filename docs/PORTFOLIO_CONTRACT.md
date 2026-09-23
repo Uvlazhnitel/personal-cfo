@@ -2,7 +2,7 @@
 
 This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.1 implements the first server-only Sharesight read adapter and a durable manual validation sync; the verified provider mapping is in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
 
-Stage 7 contract readiness is `READY_FOR_LIVE_PROVIDER_VALIDATION`. Sharesight User API V2/V2.1 is the selected provider and the HTTP/OAuth boundary is implemented. Only encrypted receipts and safe revision/run state are persisted. Provider evidence is not yet activated in canonical portfolio tables, and no scheduled synchronization exists.
+Stage 7 contract readiness is `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`. Sharesight User API V2/V2.1 is the selected provider and the HTTP/OAuth boundary has been exercised against the provisioned sandbox. Only encrypted receipts and safe revision/run state are persisted. Provider evidence is not yet activated in canonical portfolio tables, and no scheduled synchronization exists.
 
 ## Terminology and authority
 
@@ -109,6 +109,8 @@ Connection, provider portfolio, valuation, holding, contribution, and revision i
 Each raw receipt records provider, endpoint capability, request cursor/window, `receivedAt`, payload SHA-256, source/revision IDs, normalization version, and processing status. Provider payload ciphertext is retained for at most 30 days for replay/diagnostics, then deleted. Receipt metadata, hashes, canonical facts, source links, and revision audit remain under their normal retention. Raw payloads are never financial truth.
 
 Sharesight has no documented provider cursor or pagination token. Its capability remains `incremental_cursor=false`. A later adapter may split full date-range reads into deterministic application-owned calendar windows and encode the current window as a composite cursor, but that state is not provider state and cannot imply incremental completeness. Stable provider IDs plus deterministic fingerprints make full-window replay idempotent.
+
+Live validation confirmed stable identities for valuations, holdings, and confirmed trades. An unconfirmed trade or payout may have a null provider ID. Such a record remains durable encrypted receipt evidence but cannot enter normalized revision history until Sharesight supplies a stable identity; the application does not derive an economic identity from mutable fields.
 
 ## Connection and security lifecycle
 

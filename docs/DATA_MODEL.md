@@ -118,6 +118,8 @@ Sharesight supplies a valuation date rather than an exact valuation instant. The
 
 Stage 7.1 adds `SharesightSyncState`, `SharesightSyncRun`, `SharesightRawReceipt`, and `SharesightSourceRevision`. They are operational/evidence records, not canonical finance. Sync state fixes one provider portfolio to an explicit owner and EUR investment account and holds a bounded lease. A response is AES-256-GCM receipted before decoding; ciphertext expires after 30 days. Stable source IDs and fingerprints preserve replay/revision history without interpreting absence as deletion. Stage 7.1 writes neither `PortfolioValuation` nor `InvestmentContribution`.
 
+Stage 7.1.1 live validation observed that unconfirmed trades and payouts can omit every stable record ID. These items stay inside their durable encrypted receipt and receive a safe quarantine category. They do not create `SharesightSourceRevision`, and no identity is synthesized from amount, date, security, or other mutable economic fields.
+
 Holdings are components and reconciliation evidence, not independent accounts or an alternate wealth source. Investment return for a period is derived from portfolio value changes adjusted for confirmed contributions, explicit withdrawals, and FX. Provider-reported P/L and contributed-capital aggregates are retained for reconciliation but do not override canonical principal or the engine. Brokerage cash enters Net Worth through exactly one declared projection, never both the portfolio total and a separate account.
 
 ### Refunds and Reimbursements
