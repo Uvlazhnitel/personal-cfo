@@ -85,7 +85,7 @@ describe('portfolio provider-neutral contract', () => {
 
   it('rejects representations that would count brokerage cash twice or omit it', () => {
     const excluded = PORTFOLIO_CONTRACT_FIXTURES.brokerageCashExcludedAggregated;
-    const providerValue = excluded.providerReportedMarketValue;
+    const providerValue = excluded.providerReportedMarketValue!;
     expectContractError(
       () =>
         createPortfolioSnapshot({
@@ -108,7 +108,7 @@ describe('portfolio provider-neutral contract', () => {
           netWorthProjection: {
             kind: 'investment_plus_separate_cash',
             investmentAccountId: included.accountId,
-            investmentValue: included.providerReportedMarketValue,
+            investmentValue: included.providerReportedMarketValue!,
             cashAccountId:
               PORTFOLIO_CONTRACT_FIXTURES.brokerageCashExcludedSeparate.netWorthProjection.kind ===
               'investment_plus_separate_cash'
@@ -345,6 +345,7 @@ describe('portfolio provider-neutral contract', () => {
     const fxUnavailable = createPortfolioSnapshot({
       ...base,
       providerReportedMarketValue: missingFx,
+      knownValuedSubtotal: missingFx,
       totalMarketValue: missingFx,
       cash: { treatment: 'included_in_total', amount: null },
       netWorthProjection: { kind: 'unavailable', reason: 'fx_unavailable' },

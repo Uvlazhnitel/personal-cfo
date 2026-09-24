@@ -1,8 +1,8 @@
 # Provider-Neutral Portfolio Contract
 
-This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.1 implements the first server-only Sharesight read adapter and a durable manual validation sync; the verified provider mapping is in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
+This document is the application-side contract for Stage 7 portfolio ingestion. It resolves provider-neutral accounting and normalization semantics. Stage 7.2B selects self-hosted Portfolio Manager as the production provider through the fixed v1 mapping in [PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md](PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md). Sharesight remains an independent reference/validation adapter documented in [PORTFOLIO_PROVIDER_SHARESIGHT.md](PORTFOLIO_PROVIDER_SHARESIGHT.md). The executable types and validation live in `packages/integrations/src/portfolio` and use domain `Money`, currency, account ID, decimal, completeness, and UTC instant primitives.
 
-Stage 7 contract readiness is `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`. Sharesight User API V2/V2.1 is the selected provider and the HTTP/OAuth boundary has been exercised against the provisioned sandbox. Only encrypted receipts and safe revision/run state are persisted. Provider evidence is not yet activated in canonical portfolio tables, and no scheduled synchronization exists.
+Stage 7 contract readiness is `READY_FOR_PORTFOLIO_MANAGER_SYNC`. The Portfolio Manager HTTP/bearer boundary, opaque provider cursor, revisions, and partial valuation semantics are implemented deterministically against upstream commit `af86470e3b3a803f7a75f496c24c580f67a5a8a0`. Only encrypted receipts and safe binding/revision/run state are persisted. Provider evidence is not activated in canonical portfolio tables, and no scheduled synchronization exists.
 
 ## Terminology and authority
 
@@ -33,7 +33,7 @@ A missing capability remains different from a valid empty result. For example, `
 
 ## Snapshot and valuation semantics
 
-A normalized `PortfolioSnapshot` identifies the owner-scoped canonical investment account, provider connection, provider portfolio account, provider revision, `sourceAsOf`, `receivedAt`, and `staleAt`. It carries exact original/reporting amounts, provider-reported value, total economic value, cash treatment, Net Worth projection, optional provider contributed-capital aggregate, holdings with explicit completeness, and source completeness.
+A normalized `PortfolioSnapshot` identifies the owner-scoped canonical investment account, provider connection, provider portfolio account, provider revision, `sourceAsOf`, `receivedAt`, and `staleAt`. It carries exact original/reporting amounts, nullable provider-reported/total economic value, a known-valued subtotal, cash treatment, Net Worth projection, optional provider contributed-capital aggregate, holdings with explicit completeness, and source completeness. A partial provider valuation may retain its known subtotal while the total and projection remain unavailable; missing value is never coerced to zero.
 
 `sourceAsOf` is the provider valuation instant. `receivedAt` is when this application received it. They are never substituted for one another. `staleAt` is derived by the application from effective versioned settings and the applicable market calendar; server-local time is not an input. A revision of the same source fact retains its stable source identity and appends a new revision rather than destructively replacing receipt history.
 
@@ -112,6 +112,8 @@ Sharesight has no documented provider cursor or pagination token. Its capability
 
 Live validation confirmed stable identities for valuations, holdings, and confirmed trades. An unconfirmed trade or payout may have a null provider ID. Such a record remains durable encrypted receipt evidence but cannot enter normalized revision history until Sharesight supplies a stable identity; the application does not derive an economic identity from mutable fields.
 
+Portfolio Manager v1 supplies a deterministic opaque capital-flow cursor. The committed cursor advances atomically with the encrypted receipt, successful normalization/quarantine decision, and source revisions. `hasMore=true` without a present, advancing cursor is rejected. The stable flow source is `eventId`; the verified fingerprint is its content revision, while revision and replacement IDs preserve provider lineage. The current head is selected by `(changedAt, revisionId)` so a late page cannot regress a newer replacement or void. Missing events are not deletions.
+
 ## Connection and security lifecycle
 
 Connection lifecycle is separate from metric completeness: `disconnected`, `connecting`, `active`, `degraded`, `reauth_required`, and `disabled`. Access/refresh tokens, API keys, client secrets, and provider credentials are secrets encrypted at rest with the existing versioned authenticated-encryption boundary. They never enter logs, fixtures, jobs, cursors, or raw receipt metadata. Provider name, non-sensitive connection state, capability set, key version, consent expiry, sync timestamps, and keyed/encrypted account references are metadata. Rotation replaces the encrypted envelope; revocation deletes usable credentials and stops synchronization.
@@ -122,6 +124,6 @@ Account IDs, holdings, portfolio values, contribution evidence, raw payloads, an
 
 ## Stage 7 acceptance fixture catalog
 
-`PORTFOLIO_CONTRACT_FIXTURES` covers valuation-only, contribution-only, market-only gain, mixed contribution/withdrawal/gain, withdrawal, cash included, cash excluded with aggregate and split projections, unknown cash treatment, stale and missing valuation, duplicate page, revised fact, cursor replay, holdings mismatch, and provider P/L disagreement. It follows the Stage 3 pattern of recurring contributions and an ad-hoc larger contribution without copying personal data.
+`PORTFOLIO_CONTRACT_FIXTURES` covers valuation-only, contribution-only, market-only gain, mixed contribution/withdrawal/gain, withdrawal, cash included, cash excluded with aggregate and split projections, unknown cash treatment, stale and missing valuation, duplicate page, revised fact, cursor replay, holdings mismatch, and provider P/L disagreement. Portfolio Manager adds complete, partial, empty, stale, exact-decimal, same-ticker/distinct-asset, paged-flow, replacement, void, sub-cent, non-EUR, and malformed-contract fixtures. All fixtures are synthetic.
 
-The full Stage 7 implementation may now add the read-only Sharesight HTTP adapter, encrypted connection persistence, durable sync jobs, and canonical persistence against the accepted binding. Manual Lightyear imports expose no API freshness marker; until freshness is independently confirmed, normalized snapshots are `source_incomplete` and cannot authorize invest-more. This contract authorizes no trading, Open Banking, AI classification, automatic contribution, provider write, or Stage 8 behavior.
+Stage 7.2B authorizes manual read-only Portfolio Manager evidence sync only. Canonical valuation/contribution activation and scheduling remain separate future work. This contract authorizes no trading, Open Banking, AI classification, automatic contribution, provider write, or Stage 8 behavior.

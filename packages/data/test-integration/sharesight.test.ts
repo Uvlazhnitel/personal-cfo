@@ -82,17 +82,17 @@ suite('Sharesight durable read-only synchronization', () => {
   it('encrypts receipts, enforces leases, and tracks new/replay/revision identities', async () => {
     const first = await beginSharesightSync(context.db, {
       ownerId,
-      portfolioId: '900001',
+      portfolioId: '293304',
       investmentAccountId: accountId,
-      connectionId: 'sharesight-test-900001',
+      connectionId: 'sharesight-test-293304',
       now: '2026-01-15T08:00:00Z',
     });
     await expect(
       beginSharesightSync(context.db, {
         ownerId,
-        portfolioId: '900001',
+        portfolioId: '293304',
         investmentAccountId: accountId,
-        connectionId: 'sharesight-test-900001',
+        connectionId: 'sharesight-test-293304',
         now: '2026-01-15T08:01:00Z',
       }),
     ).rejects.toMatchObject({ code: 'sharesight.sync_in_progress' });
@@ -125,9 +125,9 @@ suite('Sharesight durable read-only synchronization', () => {
 
     const second = await beginSharesightSync(context.db, {
       ownerId,
-      portfolioId: '900001',
+      portfolioId: '293304',
       investmentAccountId: accountId,
-      connectionId: 'sharesight-test-900001',
+      connectionId: 'sharesight-test-293304',
       now: '2026-01-15T09:00:00Z',
     });
     const replayReceipt = await persistSharesightRawReceipt(context.db, second, receiptKey, {
@@ -326,29 +326,29 @@ suite('Sharesight durable read-only synchronization', () => {
       (await context.db.select({ value: count() }).from(investmentContributions))[0]?.value,
     ).toBe(0);
     const runs = await context.db.select().from(sharesightSyncRuns);
-    expect(runs.filter((run) => run.providerPortfolioId === '293304')).toHaveLength(4);
+    expect(runs.filter((run) => run.providerPortfolioId === '293304')).toHaveLength(6);
     expect(runs.every((run) => run.status === 'completed')).toBe(true);
   });
 
   it('recovers a stale lease and rejects silent canonical-account rebinding', async () => {
     const stale = await beginSharesightSync(context.db, {
       ownerId,
-      portfolioId: '900002',
+      portfolioId: '293304',
       investmentAccountId: accountId,
-      connectionId: 'sharesight-test-900002',
+      connectionId: 'sharesight-test-293304',
       now: '2026-01-15T10:00:00Z',
     });
     const checkpoint = {
       source: 'sharesight-application-window',
       phase: 'trades',
-      portfolioId: '900002',
-      resourceId: '900002',
+      portfolioId: '293304',
+      resourceId: '293304',
       from: '2026-01-01',
       to: '2026-01-31',
     } as const;
     const checkpointReceipt = await persistSharesightRawReceipt(context.db, stale, receiptKey, {
       capability: 'fees',
-      requestKey: '/api/v2/portfolios/900002/trades.json?start_date=2026-01-01',
+      requestKey: '/api/v2/portfolios/293304/trades.json?start_date=2026-01-01',
       requestFrom: '2026-01-01',
       requestTo: '2026-01-31',
       receivedAt: '2026-01-15T10:00:01Z',
@@ -364,9 +364,9 @@ suite('Sharesight durable read-only synchronization', () => {
     });
     const recovered = await beginSharesightSync(context.db, {
       ownerId,
-      portfolioId: '900002',
+      portfolioId: '293304',
       investmentAccountId: accountId,
-      connectionId: 'sharesight-test-900002',
+      connectionId: 'sharesight-test-293304',
       now: '2026-01-15T10:16:00Z',
     });
     expect(recovered.runId).toBe(stale.runId);
@@ -380,11 +380,11 @@ suite('Sharesight durable read-only synchronization', () => {
     await expect(
       beginSharesightSync(context.db, {
         ownerId,
-        portfolioId: '900002',
+        portfolioId: '293304',
         investmentAccountId: accountId,
         connectionId: 'different-connection',
         now: '2026-01-15T11:00:00Z',
       }),
-    ).rejects.toMatchObject({ code: 'sharesight.binding_conflict' });
+    ).rejects.toMatchObject({ code: 'portfolio.binding_conflict' });
   });
 });

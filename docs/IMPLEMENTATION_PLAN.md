@@ -128,11 +128,11 @@ Required reconciliation regressions are:
 
 ## Stage 7 — Portfolio Tracker Integration
 
-**Contract status:** `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`. Stage 7.0 resolved provider-neutral authority and Stage 7.0.2 selected Sharesight. Stage 7.1 implements OAuth client credentials, bounded read-only HTTP, exact response validation, encrypted receipts, replay/revision state, and a durable full-history manual sync. Stage 7.1.1 validated both V2/V2.1 access and unchanged replay against the sandbox and hardened observed direct-root performance plus identity-less unconfirmed trade/payout shapes. Evidence is intentionally not activated in canonical valuation/contribution tables; no schedule or background job exists.
+**Contract status:** `READY_FOR_PORTFOLIO_MANAGER_SYNC`. Stage 7.0 resolved provider-neutral authority; Stage 7.1/7.1.1 retain Sharesight as a validated reference adapter. Stage 7.2B selects self-hosted Portfolio Manager v1 for production, adds bounded bearer-authenticated reads, exact response/fingerprint validation, encrypted receipts, opaque cursor recovery, replacement/void state, and a durable manual sync. Evidence is intentionally not activated in canonical valuation/contribution tables; no schedule or background job exists.
 
 **Goal:** Import portfolio value, holdings summary, contribution evidence, and reconciliation data without double counting.
 
-**Dependencies:** Stage 5; provider-neutral contract resolved; Sharesight API access provisioned for the personal account; manual Lightyear import freshness explicitly confirmed or recommendations kept source-incomplete.
+**Dependencies:** Stage 5; provider-neutral contract resolved; Portfolio Manager upstream contract `portfolio-manager-personal-cfo-v1` pinned to commit `af86470e3b3a803f7a75f496c24c580f67a5a8a0`; non-EUR authority remains blocked by the FX decision.
 
 **Tasks:** Implement capability discovery, encrypted connection configuration, raw receipt, normalization, cursoring, contribution matching, stale-state handling, and contract fixtures.
 

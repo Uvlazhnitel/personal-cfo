@@ -1,9 +1,16 @@
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:crypto';
+import { createHash } from 'node:crypto';
 
 import { and, eq, isNotNull, lte } from 'drizzle-orm';
 
 import type { Database } from './database.js';
 import { DataConflictError, DataInvariantError } from './errors.js';
+import {
+  decryptPortfolioPayload,
+  encryptPortfolioPayload,
+  parsePortfolioReceiptKey,
+} from './portfolio-receipts.js';
+import type { PortfolioReceiptKey } from './portfolio-receipts.js';
+import { claimPortfolioProviderBinding } from './portfolio-provider-bindings.js';
 import {
   accounts,
   sharesightRawReceipts,
@@ -17,7 +24,7 @@ import { generateUuidV7 } from './uuid-v7.js';
 const LEASE_MILLISECONDS = 15 * 60_000;
 const RAW_RETENTION_MILLISECONDS = 30 * 24 * 60 * 60_000;
 
-export type SharesightReceiptKey = Uint8Array & { readonly __sharesightReceiptKey: unique symbol };
+export type SharesightReceiptKey = PortfolioReceiptKey;
 
 export type SharesightSyncLease = Readonly<{
   leaseId: string;
@@ -62,52 +69,7 @@ function date(value: string): Date {
 }
 
 export function parseSharesightReceiptKey(value: string): SharesightReceiptKey {
-  if (!/^[A-Za-z0-9+/]{43}=$/u.test(value)) {
-    throw new DataInvariantError(
-      'sharesight.invalid_receipt_key',
-      'SHARESIGHT_RAW_RECEIPT_KEY must be a base64-encoded 32-byte key.',
-    );
-  }
-  const decoded = Buffer.from(value, 'base64');
-  if (decoded.length !== 32 || decoded.toString('base64') !== value) {
-    throw new DataInvariantError(
-      'sharesight.invalid_receipt_key',
-      'SHARESIGHT_RAW_RECEIPT_KEY must be a base64-encoded 32-byte key.',
-    );
-  }
-  return Uint8Array.from(decoded) as SharesightReceiptKey;
-}
-
-function encryptPayload(payload: string, key: SharesightReceiptKey) {
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(payload, 'utf8'), cipher.final()]);
-  return Object.freeze({
-    ciphertext: ciphertext.toString('base64'),
-    iv: iv.toString('base64'),
-    authTag: cipher.getAuthTag().toString('base64'),
-  });
-}
-
-function decryptPayload(
-  ciphertext: string,
-  iv: string,
-  authTag: string,
-  key: SharesightReceiptKey,
-): string {
-  try {
-    const decipher = createDecipheriv('aes-256-gcm', key, Buffer.from(iv, 'base64'));
-    decipher.setAuthTag(Buffer.from(authTag, 'base64'));
-    return Buffer.concat([
-      decipher.update(Buffer.from(ciphertext, 'base64')),
-      decipher.final(),
-    ]).toString('utf8');
-  } catch {
-    throw new DataInvariantError(
-      'sharesight.receipt_decryption_failed',
-      'Sharesight raw receipt could not be decrypted.',
-    );
-  }
+  return parsePortfolioReceiptKey(value, 'SHARESIGHT_RAW_RECEIPT_KEY');
 }
 
 export async function beginSharesightSync(
@@ -120,6 +82,15 @@ export async function beginSharesightSync(
     now: string;
   }>,
 ): Promise<SharesightSyncLease> {
+  await claimPortfolioProviderBinding(db, {
+    ownerId: input.ownerId,
+    investmentAccountId: input.investmentAccountId,
+    provider: 'sharesight',
+    connectionId: input.connectionId,
+    providerInstanceId: input.portfolioId,
+    providerPortfolioId: input.portfolioId,
+    now: input.now,
+  });
   return db.transaction(async (tx) => {
     const owner = await tx.query.users.findFirst({ where: eq(users.id, input.ownerId) });
     if (owner === undefined) {
@@ -290,7 +261,7 @@ export async function persistSharesightRawReceipt(
     normalizationVersion: string;
   }>,
 ): Promise<PersistedSharesightReceipt> {
-  const encrypted = encryptPayload(input.payload, key);
+  const encrypted = encryptPortfolioPayload(input.payload, key);
   const payloadSha256 = createHash('sha256').update(input.payload).digest('hex');
   const id = generateUuidV7('sharesight-receipt');
   const payloadExpiresAt = new Date(
@@ -351,7 +322,13 @@ export async function loadPendingSharesightReceipts(
         requestTo: row.requestTo,
         receivedAt: row.receivedAt,
         payloadSha256: row.payloadSha256,
-        payload: decryptPayload(row.payloadCiphertext, row.payloadIv, row.payloadAuthTag, key),
+        payload: decryptPortfolioPayload(
+          row.payloadCiphertext,
+          row.payloadIv,
+          row.payloadAuthTag,
+          key,
+          'Sharesight',
+        ),
       });
     }),
   );

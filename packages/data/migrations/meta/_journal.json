@@ -64,6 +64,13 @@
       "when": 1790104210234,
       "tag": "0008_sharesight_live_adapter",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790192809045,
+      "tag": "0009_portfolio_manager_adapter",
+      "breakpoints": true
     }
   ]
 }

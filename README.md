@@ -1,6 +1,6 @@
 # Personal CFO
 
-Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, and a manually invoked read-only Sharesight validation adapter. Bank activation, canonical portfolio activation, voice, AI, proactive notifications, and the product PWA are not implemented.
+Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, and manually invoked read-only portfolio evidence adapters. Portfolio Manager is the selected self-hosted production provider; Sharesight remains an independent reference/validation provider. Bank activation, canonical portfolio activation, voice, AI, proactive notifications, and the product PWA are not implemented.
 
 ## Requirements
 
@@ -42,6 +42,8 @@ The web app is available at [http://localhost:3000](http://localhost:3000). `/ap
 Telegram remains disabled when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, and `TELEGRAM_OWNER_ID` are all absent. Set all three to enable it; partial configuration fails worker startup. See [`docs/TELEGRAM.md`](docs/TELEGRAM.md) for supported commands, durability, correction, and privacy behavior.
 
 Sharesight configuration is read only by `pnpm sharesight:sync`, so normal worker startup remains unaffected. The command stores encrypted validation receipts and provider evidence but never writes canonical valuations or confirmed investment principal. See [`docs/PORTFOLIO_PROVIDER_SHARESIGHT.md`](docs/PORTFOLIO_PROVIDER_SHARESIGHT.md) for required variables, authority boundaries, and current live-validation prerequisites.
+
+Portfolio Manager configuration is read only by `pnpm portfolio-manager:sync`; normal worker startup remains unaffected. The manual command requires the v1 integration contract, stores every response as an encrypted receipt before decoding, resumes the provider cursor atomically, and produces evidence only. It never writes canonical valuations, confirmed principal, input versions, recalculations, recommendations, or financial jobs. See [`docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md`](docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md).
 
 ## Docker Compose
 

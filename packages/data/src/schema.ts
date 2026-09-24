@@ -1021,3 +1021,185 @@ export const sharesightSourceRevisions = pgTable(
     index('sharesight_source_receipt_idx').on(table.receiptId),
   ],
 );
+
+export const portfolioProviderBindings = pgTable(
+  'portfolio_provider_bindings',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    investmentAccountId: uuid('investment_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    provider: text('provider').notNull(),
+    connectionId: text('connection_id').notNull(),
+    providerInstanceId: text('provider_instance_id'),
+    providerPortfolioId: text('provider_portfolio_id'),
+    createdAt: instant('created_at').notNull(),
+    updatedAt: instant('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.investmentAccountId] }),
+    uniqueIndex('portfolio_provider_connection_uq').on(table.provider, table.connectionId),
+    check(
+      'portfolio_provider_binding_provider_ck',
+      sql`${table.provider} in ('sharesight','portfolio-manager')`,
+    ),
+    check(
+      'portfolio_provider_identity_shape_ck',
+      sql`(${table.providerInstanceId} is null and ${table.providerPortfolioId} is null) or (${table.providerInstanceId} is not null and ${table.providerPortfolioId} is not null)`,
+    ),
+  ],
+);
+
+export const portfolioManagerSyncStates = pgTable(
+  'portfolio_manager_sync_states',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: text('connection_id').notNull(),
+    investmentAccountId: uuid('investment_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    checkpoint: text('checkpoint'),
+    leaseId: uuid('lease_id'),
+    leaseExpiresAt: instant('lease_expires_at'),
+    activeRunId: uuid('active_run_id'),
+    lastSuccessfulSyncAt: instant('last_successful_sync_at'),
+    lastFailureCategory: text('last_failure_category'),
+    createdAt: instant('created_at').notNull(),
+    updatedAt: instant('updated_at').notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.ownerId, table.connectionId] }),
+    uniqueIndex('portfolio_manager_connection_id_uq').on(table.connectionId),
+    check(
+      'portfolio_manager_sync_lease_shape_ck',
+      sql`(${table.leaseId} is null and ${table.leaseExpiresAt} is null) or (${table.leaseId} is not null and ${table.leaseExpiresAt} is not null)`,
+    ),
+  ],
+);
+
+export const portfolioManagerSyncRuns = pgTable(
+  'portfolio_manager_sync_runs',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: text('connection_id').notNull(),
+    status: text('status').notNull(),
+    startingCursor: text('starting_cursor'),
+    continuationCursor: text('continuation_cursor'),
+    counts: jsonb('counts').notNull().default({}),
+    sourceCompleteness: text('source_completeness').notNull().default('unavailable'),
+    startedAt: instant('started_at').notNull(),
+    completedAt: instant('completed_at'),
+    failureCategory: text('failure_category'),
+  },
+  (table) => [
+    index('portfolio_manager_runs_owner_started_idx').on(table.ownerId, table.startedAt),
+    check(
+      'portfolio_manager_run_status_ck',
+      sql`${table.status} in ('running','completed','failed')`,
+    ),
+    check(
+      'portfolio_manager_run_completion_ck',
+      sql`(${table.status} = 'running' and ${table.completedAt} is null) or (${table.status} <> 'running' and ${table.completedAt} is not null)`,
+    ),
+    check(
+      'portfolio_manager_run_completeness_ck',
+      sql`${table.sourceCompleteness} in ('complete','partial','unavailable')`,
+    ),
+  ],
+);
+
+export const portfolioManagerRawReceipts = pgTable(
+  'portfolio_manager_raw_receipts',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => portfolioManagerSyncRuns.id),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: text('connection_id').notNull(),
+    endpoint: text('endpoint').notNull(),
+    requestKey: text('request_key').notNull(),
+    requestCursor: text('request_cursor'),
+    responseCursor: text('response_cursor'),
+    receivedAt: instant('received_at').notNull(),
+    payloadSha256: text('payload_sha256').notNull(),
+    payloadCiphertext: text('payload_ciphertext'),
+    payloadIv: text('payload_iv'),
+    payloadAuthTag: text('payload_auth_tag'),
+    payloadExpiresAt: instant('payload_expires_at').notNull(),
+    status: text('status').notNull(),
+    normalizationVersion: text('normalization_version').notNull(),
+    sourceIds: jsonb('source_ids').notNull().default([]),
+    revisionIds: jsonb('revision_ids').notNull().default([]),
+    failureCategory: text('failure_category'),
+    processedAt: instant('processed_at'),
+  },
+  (table) => [
+    index('portfolio_manager_receipt_run_request_idx').on(table.runId, table.requestKey),
+    index('portfolio_manager_receipt_pending_idx').on(
+      table.ownerId,
+      table.connectionId,
+      table.status,
+      table.receivedAt,
+    ),
+    index('portfolio_manager_receipt_expiry_idx').on(table.payloadExpiresAt),
+    check(
+      'portfolio_manager_receipt_endpoint_ck',
+      sql`${table.endpoint} in ('capabilities','snapshot','capital_flows')`,
+    ),
+    check(
+      'portfolio_manager_receipt_status_ck',
+      sql`${table.status} in ('received','normalized','quarantined','failed')`,
+    ),
+    check(
+      'portfolio_manager_receipt_ciphertext_shape_ck',
+      sql`(${table.payloadCiphertext} is null and ${table.payloadIv} is null and ${table.payloadAuthTag} is null) or (${table.payloadCiphertext} is not null and ${table.payloadIv} is not null and ${table.payloadAuthTag} is not null)`,
+    ),
+  ],
+);
+
+export const portfolioManagerSourceRevisions = pgTable(
+  'portfolio_manager_source_revisions',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: text('connection_id').notNull(),
+    sourceId: text('source_id').notNull(),
+    revisionSha256: text('revision_sha256').notNull(),
+    recordKind: text('record_kind').notNull(),
+    providerRevisionId: text('provider_revision_id'),
+    providerStatus: text('provider_status'),
+    changedAt: instant('changed_at'),
+    replacesRevisionId: text('replaces_revision_id'),
+    replacementRevisionIds: jsonb('replacement_revision_ids').notNull().default([]),
+    receiptId: uuid('receipt_id')
+      .notNull()
+      .references(() => portfolioManagerRawReceipts.id),
+    firstSeenAt: instant('first_seen_at').notNull(),
+    lastSeenAt: instant('last_seen_at').notNull(),
+    isCurrent: boolean('is_current').notNull().default(true),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.ownerId, table.connectionId, table.sourceId, table.revisionSha256],
+    }),
+    uniqueIndex('portfolio_manager_source_current_uq')
+      .on(table.ownerId, table.connectionId, table.sourceId)
+      .where(sql`${table.isCurrent}`),
+    index('portfolio_manager_source_receipt_idx').on(table.receiptId),
+    check(
+      'portfolio_manager_source_status_ck',
+      sql`${table.providerStatus} is null or ${table.providerStatus} in ('ACTIVE','REPLACED','VOIDED')`,
+    ),
+  ],
+);

@@ -10,6 +10,7 @@
     "build": "node build.mjs",
     "cli:create-user": "pnpm run build && node dist/cli/create-user.js",
     "cli:migrate": "pnpm run build && node dist/cli/migrate.js",
+    "cli:portfolio-manager-sync": "pnpm run build && node dist/cli/portfolio-manager-sync.js",
     "cli:sharesight-sync": "pnpm run build && node dist/cli/sharesight-sync.js",
     "cli:synthetic-import": "pnpm run build && node dist/dev/import-synthetic.js",
     "dev": "pnpm run build && pnpm run start",

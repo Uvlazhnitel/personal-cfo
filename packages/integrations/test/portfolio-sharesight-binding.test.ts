@@ -127,7 +127,7 @@ describe('Sharesight Stage 7 provider binding', () => {
   it('normalizes an EUR valuation as an included-cash authoritative total', () => {
     const snapshot = normalizedSnapshot();
     expect(snapshot.providerPortfolioId).toBe('293304');
-    expect(snapshot.providerReportedMarketValue.original.amountMinor).toBe(1_000_010n);
+    expect(snapshot.providerReportedMarketValue!.original.amountMinor).toBe(1_000_010n);
     expect(snapshot.totalMarketValue?.original.amountMinor).toBe(1_000_010n);
     expect(snapshot.cash).toMatchObject({
       treatment: 'included_in_total',

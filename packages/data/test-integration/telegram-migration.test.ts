@@ -10,7 +10,7 @@ import type { DatabaseContext } from '../src/index.js';
 const databaseUrl = process.env['DATABASE_URL'];
 const suite = databaseUrl === undefined ? describe.skip : describe;
 
-suite('Stage 5 through Stage 7.1 migrations', () => {
+suite('Stage 5 through Stage 7.2B migrations', () => {
   let context: DatabaseContext;
   let temporaryMigrations: string;
   const sourceMigrations = resolve(process.cwd(), 'packages/data/migrations');
@@ -112,7 +112,13 @@ suite('Stage 5 through Stage 7.1 migrations', () => {
       join(sourceMigrations, `${sharesight.tag}.sql`),
       join(temporaryMigrations, basename(`${sharesight.tag}.sql`)),
     );
-    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await writeFile(
+      join(temporaryMigrations, 'meta/_journal.json'),
+      JSON.stringify({
+        ...fullJournal,
+        entries: fullJournal.entries.filter((entry) => entry.idx <= 8),
+      }),
+    );
     await migrateDatabase(context.db, temporaryMigrations);
     await migrateDatabase(context.db, temporaryMigrations);
 
@@ -120,5 +126,75 @@ suite('Stage 5 through Stage 7.1 migrations', () => {
       "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'sharesight_%'",
     );
     expect(sharesightTables.rows[0]?.count).toBe('4');
+
+    await context.pool.query(`
+      insert into users (id, login_name, password_hash, locale, time_zone, created_at, updated_at)
+      values (
+        '018f0000-0000-7000-8000-000000000991',
+        'stage-71-upgrade',
+        'not-used',
+        'en',
+        'Europe/Riga',
+        '2026-09-23T00:00:00Z',
+        '2026-09-23T00:00:00Z'
+      );
+      insert into accounts (id, owner_id, kind, value_source, currency, payload)
+      values (
+        '018f0000-0000-7000-8000-000000000992',
+        '018f0000-0000-7000-8000-000000000991',
+        'investment',
+        'portfolio_valuation',
+        'EUR',
+        '{"includeInNetWorth":true}'::jsonb
+      );
+      insert into sharesight_sync_states (
+        owner_id,
+        provider_portfolio_id,
+        investment_account_id,
+        connection_id,
+        created_at,
+        updated_at
+      ) values (
+        '018f0000-0000-7000-8000-000000000991',
+        '293304',
+        '018f0000-0000-7000-8000-000000000992',
+        'sharesight-upgrade-connection',
+        '2026-09-23T00:00:00Z',
+        '2026-09-23T00:00:00Z'
+      );
+    `);
+
+    const portfolioManager = fullJournal.entries.find((entry) => entry.idx === 9);
+    if (portfolioManager === undefined) throw new Error('Stage 7.2B migration is missing.');
+    await cp(
+      join(sourceMigrations, `${portfolioManager.tag}.sql`),
+      join(temporaryMigrations, basename(`${portfolioManager.tag}.sql`)),
+    );
+    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await migrateDatabase(context.db, temporaryMigrations);
+    await migrateDatabase(context.db, temporaryMigrations);
+
+    const portfolioManagerTables = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'portfolio_manager_%'",
+    );
+    expect(portfolioManagerTables.rows[0]?.count).toBe('4');
+    const providerBinding = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name = 'portfolio_provider_bindings'",
+    );
+    expect(providerBinding.rows[0]?.count).toBe('1');
+    const backfilledBinding = await context.pool.query<{
+      provider: string;
+      connection_id: string;
+      provider_portfolio_id: string;
+    }>(
+      "select provider, connection_id, provider_portfolio_id from portfolio_provider_bindings where owner_id = '018f0000-0000-7000-8000-000000000991'",
+    );
+    expect(backfilledBinding.rows).toEqual([
+      {
+        provider: 'sharesight',
+        connection_id: 'sharesight-upgrade-connection',
+        provider_portfolio_id: '293304',
+      },
+    ]);
   });
 });

@@ -90,7 +90,7 @@ export type PortfolioNetWorthProjection =
     }>
   | Readonly<{
       kind: 'unavailable';
-      reason: 'cash_treatment_unknown' | 'fx_unavailable';
+      reason: 'cash_treatment_unknown' | 'fx_unavailable' | 'missing_valuation';
     }>;
 
 export type NormalizedHolding = Readonly<{
@@ -100,7 +100,7 @@ export type NormalizedHolding = Readonly<{
   symbol: string | null;
   quantity: DecimalRate;
   marketValue: ReportableAmount | null;
-  sourceAsOf: Instant;
+  sourceAsOf: Instant | null;
   revision: ProviderRevisionIdentity;
 }>;
 
@@ -112,7 +112,8 @@ export type PortfolioSnapshot = Readonly<{
   sourceAsOf: Instant;
   receivedAt: Instant;
   staleAt: Instant;
-  providerReportedMarketValue: ReportableAmount;
+  providerReportedMarketValue: ReportableAmount | null;
+  knownValuedSubtotal: ReportableAmount;
   totalMarketValue: ReportableAmount | null;
   cash: PortfolioCash;
   netWorthProjection: PortfolioNetWorthProjection;

@@ -1,6 +1,6 @@
 # Sharesight Portfolio Provider Binding
 
-Stage 7 is bound to the Sharesight User API V2/V2.1 for the single-owner personal deployment. Stage 7.1 adds a server-only read client and a manually invoked durable validation sync. It adds no provider writes, background synchronization, or canonical financial activation.
+Sharesight User API V2/V2.1 remains the independent Stage 7 reference/validation provider for the single-owner personal deployment. Stage 7.1 adds its server-only read client and manually invoked durable validation sync. ADR-035 selects self-hosted Portfolio Manager as the production provider; existing Sharesight receipts and revision history remain intact and cannot share authority with Portfolio Manager for the same canonical investment account. This adapter adds no provider writes, background synchronization, or canonical financial activation.
 
 Sharesight is selected because its documented User API can pull portfolio data, its API supports OAuth 2.0 and a sandbox by request, and Sharesight officially supports sanitized Lightyear trade-file imports. The Lightyear connection is a manual CSV import, not a live broker feed. The adapter therefore cannot infer that a fresh Sharesight valuation proves the Lightyear trade history is current.
 

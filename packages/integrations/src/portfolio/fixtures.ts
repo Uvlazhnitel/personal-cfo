@@ -74,6 +74,7 @@ function includedCashSnapshot(overrides: Partial<PortfolioSnapshot> = {}): Portf
     receivedAt: parseInstant('2026-09-15T18:00:05Z'),
     staleAt: parseInstant('2026-09-18T18:00:00Z'),
     providerReportedMarketValue: total,
+    knownValuedSubtotal: total,
     totalMarketValue: total,
     cash: { treatment: 'included_in_total', amount: reportable(20_000n) },
     netWorthProjection: {
@@ -103,6 +104,7 @@ function excludedCashSnapshot(split: boolean): PortfolioSnapshot {
     receivedAt: parseInstant('2026-09-15T18:00:05Z'),
     staleAt: parseInstant('2026-09-18T18:00:00Z'),
     providerReportedMarketValue: securities,
+    knownValuedSubtotal: securities,
     totalMarketValue: total,
     cash: { treatment: 'excluded_from_total', amount: cash },
     netWorthProjection: split
@@ -137,6 +139,7 @@ function unknownCashSnapshot(): PortfolioSnapshot {
     receivedAt: parseInstant('2026-09-15T18:00:05Z'),
     staleAt: parseInstant('2026-09-18T18:00:00Z'),
     providerReportedMarketValue: reported,
+    knownValuedSubtotal: reported,
     totalMarketValue: null,
     cash: { treatment: 'unavailable', amount: null },
     netWorthProjection: { kind: 'unavailable', reason: 'cash_treatment_unknown' },

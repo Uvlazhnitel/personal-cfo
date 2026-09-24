@@ -519,6 +519,7 @@ export function normalizeSharesightValuation(
     receivedAt: context.receivedAt,
     staleAt: context.staleAt,
     providerReportedMarketValue: total,
+    knownValuedSubtotal: total,
     totalMarketValue: total,
     cash: { treatment: 'included_in_total', amount: cashAmount },
     netWorthProjection: {

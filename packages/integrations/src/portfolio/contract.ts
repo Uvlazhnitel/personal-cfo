@@ -177,10 +177,16 @@ function createPortfolioCash(input: PortfolioCash): PortfolioCash {
 }
 
 function validateEconomicTotal(
-  providerValue: ReportableAmount,
+  providerValue: ReportableAmount | null,
   total: ReportableAmount | null,
   cash: PortfolioCash,
 ): void {
+  if (providerValue === null) {
+    if (total !== null) {
+      invalid('missing_provider_total', 'A total cannot exist without a provider-reported value.');
+    }
+    return;
+  }
   if (cash.treatment === 'unavailable') {
     if (total !== null) {
       invalid(
@@ -225,19 +231,23 @@ function validateEconomicTotal(
 function createProjection(
   input: PortfolioNetWorthProjection,
   accountId: PortfolioSnapshot['accountId'],
-  providerValue: ReportableAmount,
+  providerValue: ReportableAmount | null,
   total: ReportableAmount | null,
   cash: PortfolioCash,
 ): PortfolioNetWorthProjection {
   if (input.kind === 'unavailable') {
-    if (cash.treatment !== 'unavailable' && total?.status !== 'missing_fx') {
+    if (cash.treatment !== 'unavailable' && total?.status !== 'missing_fx' && total !== null) {
       return invalid(
         'unnecessary_unavailable_projection',
         'Available EUR value needs a projection.',
       );
     }
     const expectedReason =
-      cash.treatment === 'unavailable' ? 'cash_treatment_unknown' : 'fx_unavailable';
+      cash.treatment === 'unavailable'
+        ? 'cash_treatment_unknown'
+        : total === null
+          ? 'missing_valuation'
+          : 'fx_unavailable';
     if (input.reason !== expectedReason) {
       return invalid(
         'projection_reason_mismatch',
@@ -271,6 +281,9 @@ function createProjection(
       'Only excluded cash can use a separate cash account.',
     );
   }
+  if (providerValue === null) {
+    return invalid('missing_provider_total', 'A split projection requires a provider value.');
+  }
   const cashAccountId = parseAccountId(input.cashAccountId);
   if (cashAccountId === accountId) {
     return invalid('cash_account_collision', 'Investment and brokerage cash accounts must differ.');
@@ -293,7 +306,7 @@ function createProjection(
 }
 
 function createHolding(input: NormalizedHolding): NormalizedHolding {
-  const sourceAsOf = parseInstant(input.sourceAsOf);
+  const sourceAsOf = input.sourceAsOf === null ? null : parseInstant(input.sourceAsOf);
   return Object.freeze({
     providerHoldingId: parseIdentity(input.providerHoldingId, 'Holding'),
     providerSecurityId: parseIdentity(input.providerSecurityId, 'Security'),
@@ -319,7 +332,11 @@ export function createPortfolioSnapshot(input: PortfolioSnapshot): PortfolioSnap
     );
   }
 
-  const providerReportedMarketValue = createReportableAmount(input.providerReportedMarketValue);
+  const providerReportedMarketValue =
+    input.providerReportedMarketValue === null
+      ? null
+      : createReportableAmount(input.providerReportedMarketValue);
+  const knownValuedSubtotal = createReportableAmount(input.knownValuedSubtotal);
   const totalMarketValue =
     input.totalMarketValue === null ? null : createReportableAmount(input.totalMarketValue);
   const cash = createPortfolioCash(input.cash);
@@ -339,6 +356,13 @@ export function createPortfolioSnapshot(input: PortfolioSnapshot): PortfolioSnap
   if (holdingIds.size !== holdingItems.length) {
     return invalid('duplicate_holding', 'Holding identities must be unique within a snapshot.');
   }
+  const sourceCompleteness = parseCompleteness(input.sourceCompleteness);
+  if (totalMarketValue === null && sourceCompleteness === 'complete') {
+    return invalid(
+      'complete_snapshot_missing_total',
+      'A complete portfolio snapshot requires an authoritative total.',
+    );
+  }
 
   return Object.freeze({
     ownerId,
@@ -349,6 +373,7 @@ export function createPortfolioSnapshot(input: PortfolioSnapshot): PortfolioSnap
     receivedAt,
     staleAt,
     providerReportedMarketValue,
+    knownValuedSubtotal,
     totalMarketValue,
     cash,
     netWorthProjection,
@@ -358,7 +383,7 @@ export function createPortfolioSnapshot(input: PortfolioSnapshot): PortfolioSnap
       completeness: parseCompleteness(input.holdings.completeness),
       items: Object.freeze(holdingItems),
     }),
-    sourceCompleteness: parseCompleteness(input.sourceCompleteness),
+    sourceCompleteness,
     revision: createProviderRevisionIdentity(input.revision),
   });
 }
@@ -384,7 +409,10 @@ export function reconcileHoldings(
   if (holdingValues.some((value) => value === null)) {
     return Object.freeze({ status: 'unavailable', difference: null });
   }
-  const target = reportingMoney(snapshot.providerReportedMarketValue);
+  const target =
+    snapshot.providerReportedMarketValue === null
+      ? null
+      : reportingMoney(snapshot.providerReportedMarketValue);
   if (target === null || target.currency !== tolerance.currency) {
     return Object.freeze({ status: 'unavailable', difference: null });
   }
