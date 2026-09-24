@@ -128,9 +128,11 @@ Required reconciliation regressions are:
 
 ## Stage 7 — Portfolio Tracker Integration
 
+**Contract status:** `READY_FOR_PORTFOLIO_MANAGER_SYNC`. Stage 7.0 resolved provider-neutral authority; Stage 7.1/7.1.1 retain Sharesight as a validated reference adapter. Stage 7.2B selects self-hosted Portfolio Manager v1 for production, adds bounded bearer-authenticated reads, exact response/fingerprint validation, encrypted receipts, opaque cursor recovery, replacement/void state, and a durable manual sync. Evidence is intentionally not activated in canonical valuation/contribution tables; no schedule or background job exists.
+
 **Goal:** Import portfolio value, holdings summary, contribution evidence, and reconciliation data without double counting.
 
-**Dependencies:** Stage 5; portfolio contract and valuation semantics resolved.
+**Dependencies:** Stage 5; provider-neutral contract resolved; Portfolio Manager upstream contract `portfolio-manager-personal-cfo-v1` pinned to commit `af86470e3b3a803f7a75f496c24c580f67a5a8a0`; non-EUR authority remains blocked by the FX decision.
 
 **Tasks:** Implement capability discovery, encrypted connection configuration, raw receipt, normalization, cursoring, contribution matching, stale-state handling, and contract fixtures.
 

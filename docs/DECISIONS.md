@@ -364,12 +364,63 @@ Decisions are effective for V1 unless superseded by a later entry. Product assum
 
 **Consequences:** `/debug` and logs expose operational categories rather than message contents or Telegram identifiers. A complete independent command supersedes an active clarification. Corrections use the recorded successful bot-message identity for 30 days and preserve compensating financial history.
 
+## ADR-032 — Provider-Neutral Portfolio Valuation and Contribution Contract
+
+**Status:** Accepted — 2026-09-17
+
+**Decision:** Normalize every portfolio source through the provider-neutral contract in `PORTFOLIO_CONTRACT.md`. `totalMarketValue` is the exact total economic investment-account value, while a three-state cash treatment records whether provider cash was included, excluded and exactly added/split, or unavailable. One explicit Net Worth projection prevents duplicate cash. Holdings, provider contributed-capital totals, and provider P/L remain detail/reconciliation evidence. Raw provider contribution events are never authoritative principal; only deterministic confirmed transfer matching with exact money and the correct portfolio account creates contribution principal. Withdrawals are explicit. Source and receipt times, freshness, opaque cursor commit, stable source/revision identity, exact FX provenance, bounded raw receipt, and disconnect-without-purge semantics are mandatory.
+
+**Reasoning:** Provider fields alone do not establish accounting meaning. Separating valuation wealth, principal flows, market residual, and cash projection preserves the existing Net Worth/CCR invariants and makes replay, correction, stale-data gating, and provider replacement deterministic.
+
+**Alternatives:** Mirroring a provider DTO would leak unstable semantics into the application. Summing every available value double-counts cash and holdings. Trusting provider P/L or aggregate contributed capital can mix flows with performance. Selecting an undocumented provider contract would only hide the prerequisite.
+
+**Consequences:** Stage 7 adapters must prove their real API can supply or explicitly lack each capability and pass the synthetic contract fixtures before live ingestion. One confirmed contribution key converges bank and portfolio observations on one economic principal flow. Material holdings/component mismatch suppresses invest-more without replacing the provider total; exact, within-rounding, or unavailable holdings reconciliation does not independently override an otherwise authoritative total. Raw portfolio payload ciphertext expires after 30 days while canonical facts and safe receipt/revision audit remain. Missing valuation, material ambiguity, stale data, or missing FX suppress invest-more recommendations. ADR-033 resolves the first concrete provider binding; no financial-engine formula changes result from this decision.
+
+## ADR-033 — Sharesight Reference Portfolio Provider Binding
+
+**Status:** Accepted — 2026-09-22
+
+**Decision:** Bind the initial single-owner Stage 7 reference/validation read path to Sharesight User API V2/V2.1. Use the portfolio ID as provider account identity, the valuation report total as the authoritative provider value with cash already included, stable resource IDs plus deterministic SHA-256 fingerprints for revisions, and exact lexical JSON-number decoding. Sharesight cash-account `DEPOSIT` and `WITHDRAWAL` records may become `ContributionEvidence` only; the existing deterministic canonical-transfer match remains the sole constructor of contribution principal. Sharesight exposes no provider cursor, revision number, exact valuation timestamp, webhook, granular OAuth scopes, or Lightyear import-freshness marker, so these capabilities remain unavailable, derived, or ambiguous as recorded in `PORTFOLIO_PROVIDER_SHARESIGHT.md`.
+
+**Reasoning:** Sharesight has an official read API, OAuth 2.0 personal-account access, documented sandbox provisioning, valuation/holding/cash/transaction/report endpoints, and official Lightyear trade-file support. Lightyear itself documents statements and exports but no public portfolio API. Plaid Investments is limited to supported US/Canadian institutions, and SnapTrade does not list Lightyear among its supported brokerages. Sharesight therefore preserves the accepted Lightyear product context without selecting an unrelated broker or inventing an undocumented interface.
+
+**Alternatives:** A direct Lightyear adapter was rejected because no official API/authentication/endpoint contract is published. Plaid Investments was rejected for geographic/institution mismatch. SnapTrade was rejected because its documented brokerage list does not include Lightyear. Sharesight V3 was rejected because Sharesight labels it closed beta and subject to shape changes without notice.
+
+**Consequences:** The Sharesight adapter may use OAuth 2.0 client credentials for the linked personal account and polling over deterministic application-owned date windows. Manual Lightyear CSV upkeep remains an operator responsibility; without independent freshness confirmation, snapshots are partial and cannot authorize invest-more. Provider totals may still be displayed, holdings remain reconciliation evidence, non-EUR authoritative facts remain quarantined pending the FX decision, and no trading or provider write is authorized. ADR-035 later selects Portfolio Manager for the production path without deleting or reinterpreting this independent reference adapter.
+
+## ADR-034 — Durable Manual Sharesight Reference Validation Sync
+
+**Status:** Accepted — 2026-09-22
+
+**Decision:** Stage 7.1 uses a server-only OAuth client-credentials adapter and an explicitly invoked manual sync. Every provider response is encrypted with AES-256-GCM and committed before decoding. A lease-backed run records deterministic full-history monthly continuation, while stable source IDs and SHA-256 fingerprints distinguish new, replayed, and revised evidence. Raw ciphertext expires after 30 days. Credentials and access tokens remain environment/in-memory only. Stage 7.1 persists operational evidence but does not write canonical portfolio valuations, confirmed principal, input versions, or recalculation jobs.
+
+**Reasoning:** Sharesight exposes no provider cursor, correction feed, deletion tombstone, or Lightyear-import freshness marker. Full rescans are the only deterministic way to observe historical revisions, and a durable pre-normalization receipt is required for crash auditability. Canonical activation before live response validation would bypass completeness/readiness information that the existing canonical valuation table cannot yet represent.
+
+**Alternatives:** An in-memory-only adapter cannot prove replay behavior across restarts. Incremental-only polling misses historical corrections. Treating a fresh Sharesight response as proof of a fresh manual Lightyear import would invent authority. Writing directly into existing canonical tables would make partial evidence economically active before the required readiness projection exists.
+
+**Consequences:** Stage 7 becomes `READY_FOR_LIVE_PROVIDER_VALIDATION`. Operators run `pnpm sharesight:sync`; no cron, queue, webhook, or worker lifecycle hook is added. Every run rescans portfolio inception through the valuation date. Missing records never delete history. All Stage 7.1 snapshots remain `source_incomplete` until a later auditable freshness workflow, and provider contribution evidence still requires deterministic bank-transfer confirmation before principal exists.
+
+**Live validation clarification — 2026-09-23:** The provisioned sandbox exposed the accepted V2/V2.1 endpoints as well as V3 portfolio discovery, so the stable binding remains V2/V2.1. Live V2 performance responses place the report directly at the response root. Some unconfirmed trades and payouts expose no stable provider ID; those observations remain encrypted receipt evidence and are quarantined rather than assigned application-invented source identities. Repeated eligible-portfolio syncs proved replay stability and zero canonical activation. The sandbox did not contain cash contributions, withdrawals, VGLA, cash components, or a naturally revised record, so the stage advances only to `READY_WITH_DOCUMENTED_PROVIDER_LIMITATIONS`.
+
+## ADR-035 — Portfolio Manager Production Provider and Durable Manual Sync
+
+**Status:** Accepted — 2026-09-23
+
+**Decision:** Select self-hosted Portfolio Manager as the production Stage 7 provider, pinned to upstream commit `af86470e3b3a803f7a75f496c24c580f67a5a8a0` and contract `portfolio-manager-personal-cfo-v1`. Use only its capabilities, snapshot, and cursor-paged capital-flow `GET` routes. Preserve provider decimals lexically, verify capital-flow SHA-256 fingerprints, select current revisions by `(changedAt, revisionId)`, and retain included cash as a component of—not an addition to—the provider total. A partial snapshot keeps a known-valued subtotal but no authoritative total or Net Worth projection. Only active, exactly representable EUR deposits/withdrawals may expose `ContributionEvidence`; no provider path creates confirmed principal.
+
+Every response is AES-256-GCM encrypted and committed before decoding. Receipt finalization, source revision state, and the opaque checkpoint advance atomically. A shared owner/account provider binding, including backfilled Sharesight connections, prevents cross-provider authority. The sync is manual and evidence-only: it writes no canonical valuation, investment contribution, input version, recalculation, recommendation, or financial job.
+
+**Reasoning:** Portfolio Manager supplies the missing deterministic production boundary directly: explicit capabilities, authoritative/partial valuation status, included-cash semantics, stable holding/asset identity, exact decimal strings, opaque continuation, stable event/revision identity, correction lineage, and verifiable content fingerprints. Binding to one reviewed upstream commit avoids inventing semantics or introducing a generic multi-provider framework. Sharesight remains useful as independent validation evidence but its manual Lightyear import freshness and unavailable provider cursor make it unsuitable as the selected production source.
+
+**Alternatives:** Replacing Sharesight history would destroy useful validation evidence and is unnecessary. Treating both providers as authoritative for one investment account would make identity and valuation conflicts ambiguous. Polling Portfolio Manager without durable receipts/checkpoints would lose crash/revision auditability. Rounding sub-cent contribution observations or converting non-EUR flows would cross the unresolved money/FX authority boundary.
+
+**Consequences:** Stage 7 is `READY_FOR_PORTFOLIO_MANAGER_SYNC`. Operators invoke `pnpm portfolio-manager:sync`; normal worker startup is unchanged. The v1 limitations are explicit: no P/L, distributions, fees, historical valuations, FX provenance, MIC/exchange identity, or provider writes. Non-EUR authority remains blocked on the existing FX decision. Canonical activation and scheduling remain later work, and the confirmed-principal-only market-movement interface is unchanged.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
 | --- | --- | --- | --- |
 | Open Banking provider and history depth | Provider coverage, PSD2 access, stable IDs, pending records, consent renewal, and pricing must be verified for Swedbank Latvia. | Product/engineering | Before Stage 8 |
-| Portfolio tracker contract | API shape, valuation time, holdings, cash inclusion, contribution history, and P/L semantics are unknown. | Product/engineering | Before Stage 7 |
 | FX provider and missing-rate policy | Availability, licensing, weekend rates, corrections, and portfolio FX attribution need evaluation. | Product/engineering | Before non-EUR ingestion |
 | Imported-data deletion scope | FRD does not say whether deletion is per record, account, connection, or all data; re-import suppression and audit retention depend on it. | Product | Before Stage 8 |
 | Numerical policy calibration | Reserve months, materiality, Cash Drag threshold, recommendation increments, and forecast assumptions remain provisional configurable defaults needing synthetic/user validation. Pay-cycle and Step-Up algorithms are accepted. | Product | During Stages 3–5 |
