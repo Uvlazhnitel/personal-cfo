@@ -22,7 +22,7 @@ flowchart LR
     PWA --> APP
 ```
 
-Open Banking, portfolio, Telegram voice, and AI adapters are later milestones. Stage 6 includes the text-only Telegram Bot API adapter; no external provider is required by the financial core.
+Enable Banking restricted production is the selected Open Banking path for one personal Swedbank Latvia EUR account; Stage 8.0 defines its contract but performs no live calls. Portfolio, Telegram voice, and AI adapters follow their own staged boundaries. Stage 6 includes the text-only Telegram Bot API adapter; no external provider is required by the financial core.
 
 ## Repository and Module Boundaries
 
@@ -129,6 +129,10 @@ An AI adapter receives an allowlisted `CfoContext`: calculated amounts, metric c
 ### Integration Adapters
 
 Bank, portfolio, FX, Telegram, and AI integrations implement domain ports. Each adapter maps provider objects into canonical commands and exposes provider-neutral errors. Provider schema changes therefore cannot propagate into the financial engine. Connection capabilities record whether balances, pending transactions, stable IDs, holdings, or contribution history are available.
+
+The Stage 8 Open Banking boundary is specified in [OPEN_BANKING_PROVIDER_ENABLE_BANKING.md](OPEN_BANKING_PROVIDER_ENABLE_BANKING.md). Enable Banking provider DTOs remain in `packages/integrations`; provider-neutral account, balance, transaction-observation, consent, coverage, and reconciliation types remain in `packages/domain`. A provider observation is not a canonical ledger entry. Stage 8.1 must durably encrypt each response before decoding, then use stable identity and append-only revisions before a booked import command can enter the canonical transaction path.
+
+Application authentication uses server-held RS256 keys. The browser participates only in a state-protected redirect; Enable Banking and Swedbank handle bank SCA, and Personal CFO never receives bank credentials. Continuation keys are committed scan state, not cross-session incremental cursors. Exactly one daily unattended sync stays within the conservative Swedbank polling boundary; webhooks may update session state but are not financial authority.
 
 The Stage 7 portfolio boundary is specified in [PORTFOLIO_CONTRACT.md](PORTFOLIO_CONTRACT.md). Self-hosted Portfolio Manager v1 is the selected production provider, pinned to upstream commit `af86470e3b3a803f7a75f496c24c580f67a5a8a0`; [PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md](PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md) defines the mapping. Sharesight V2/V2.1 remains an independent reference/validation adapter. Both use explicit manual CLIs and encrypted pre-decoding receipts. A shared owner/account binding prevents simultaneous provider authority. Portfolio Manager commits its opaque cursor with normalized revision state, while Sharesight retains its application-owned full-history windows. The financial engine imports neither adapter nor persistence code, and neither sync activates evidence in canonical financial tables.
 

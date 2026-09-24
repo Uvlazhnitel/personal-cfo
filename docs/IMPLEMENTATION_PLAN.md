@@ -144,11 +144,13 @@ Required reconciliation regressions are:
 
 ## Stage 8 — Open Banking Integration
 
+**Contract status:** `READY_FOR_OPEN_BANKING_ADAPTER`. Stage 8.0 selects Enable Banking restricted production for one personal Swedbank Latvia EUR account and resolves history coverage, consent, stable identity, pending/booked, reconciliation, EUR authority, disconnect, and account-scoped purge semantics. No live adapter, persistence, callback, or job is implemented by Stage 8.0.
+
 **Goal:** Reliably synchronize Swedbank accounts, balances, and transactions through the selected provider.
 
-**Dependencies:** Stage 5; provider, history, deletion, FX, and consent decisions resolved.
+**Dependencies:** Stage 5; ADR-036 and ADR-037; an operator-owned Enable Banking restricted-production or sandbox application; live proof that Swedbank supplies stable `entry_reference` for canonicalizable records.
 
-**Tasks:** Implement OAuth/PKCE connection, encrypted tokens, incremental sync, raw imports, stable identity, pending-to-booked matching, transfer candidates, reconciliation, consent renewal, disconnect, and purge.
+**Tasks:** Stage 8.1 may implement the RS256 application client, state-protected redirect/session callback, encrypted session data, account discovery/selection, durable raw imports, `longest` initial scan, daily overlapping polling, stable revision identity, pending-to-booked candidates, booked canonical import, transfer candidates, reconciliation, consent renewal, disconnect, and account purge. It must not invent PKCE, refresh tokens, or a cross-session provider cursor absent from the selected contract.
 
 **Deliverables:** Bank adapter, callback, sync jobs/state, review queue, account reconciliation, and recovery runbook.
 
