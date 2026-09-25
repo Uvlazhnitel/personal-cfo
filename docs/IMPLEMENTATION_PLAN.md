@@ -144,13 +144,13 @@ Required reconciliation regressions are:
 
 ## Stage 8 — Open Banking Integration
 
-**Contract status:** `READY_FOR_OPEN_BANKING_ADAPTER`. Stage 8.0 selects Enable Banking restricted production for one personal Swedbank Latvia EUR account and resolves history coverage, consent, stable identity, pending/booked, reconciliation, EUR authority, disconnect, and account-scoped purge semantics. No live adapter, persistence, callback, or job is implemented by Stage 8.0.
+**Implementation status:** `READY_FOR_STAGE_8_2`. Stage 8.0 selected Enable Banking restricted production for one personal Swedbank Latvia EUR account. Stage 8.1 implements the dependency-free RS256 read client, state-protected consent callback, encrypted session/account metadata, explicit EUR account binding, durable encrypted receipts, manual `longest` scan, evidence revision tracking, and explicit disconnect. It intentionally writes no canonical bank facts and adds no scheduler or webhook.
 
 **Goal:** Reliably synchronize Swedbank accounts, balances, and transactions through the selected provider.
 
 **Dependencies:** Stage 5; ADR-036 and ADR-037; an operator-owned Enable Banking restricted-production or sandbox application; live proof that Swedbank supplies stable `entry_reference` for canonicalizable records.
 
-**Tasks:** Stage 8.1 may implement the RS256 application client, state-protected redirect/session callback, encrypted session data, account discovery/selection, durable raw imports, `longest` initial scan, daily overlapping polling, stable revision identity, pending-to-booked candidates, booked canonical import, transfer candidates, reconciliation, consent renewal, disconnect, and account purge. It must not invent PKCE, refresh tokens, or a cross-session provider cursor absent from the selected contract.
+**Next boundary:** Stage 8.2 may add scheduled overlapping evidence ingestion, booked canonical import commands, pending-to-booked candidates, transfer matching, reconciliation activation, renewal workflow, and account-scoped purge. It must preserve the Stage 8.1 encrypted receipt/state boundaries and must not invent PKCE, refresh tokens, or a cross-session provider cursor absent from the selected contract.
 
 **Deliverables:** Bank adapter, callback, sync jobs/state, review queue, account reconciliation, and recovery runbook.
 

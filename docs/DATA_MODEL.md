@@ -108,6 +108,8 @@ Stage 8.0 binds one EUR Swedbank Latvia account through Enable Banking. `BankPro
 
 `BankHistoryCoverage` becomes complete only after every session-scoped continuation page for its closed interval is durably received and normalized. Initial/reconnect scans use the provider's `longest` strategy; later consent sessions establish a new scan rather than reuse an old continuation key. Metrics whose full input period predates the proven cutover are partial or unavailable.
 
+Migration `0010` persists the Stage 8.1 operational boundary. `EnableBankingConnection` owns one consent generation, encrypted session alias, actual expiry, and bounded lease. `EnableBankingAuthorizationAttempt` contains only a single-use SHA-256 state hash and atomic status; the authorization code is never stored. `EnableBankingProviderAccount` keeps the stable account key plus encrypted identification hash, session UID, and display hint; an explicit owner-scoped EUR binding references the canonical bank account. `EnableBankingRun`, `EnableBankingRawReceipt`, and `EnableBankingSourceRevision` preserve scan state, AES-256-GCM ciphertext, replay/revision identity, and safe status. Ciphertext expires after 30 days. These tables are evidence/operations, not canonical ledger authority.
+
 Pending entries do not enter historical income, spending, CCR, or Net Worth snapshots. Pending debits reduce projected operational cash; pending credits do not increase Safe to Invest. When booked, a matched pending transaction is superseded. Reversed records remain auditable and their booked financial effect is neutralized by a linked reversal.
 
 ## Explicit Financial Treatments

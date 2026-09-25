@@ -436,6 +436,16 @@ Every response is AES-256-GCM encrypted and committed before decoding. Receipt f
 
 **Consequences:** Purge retains only a non-reconstructable audit event and a retired internal connection generation that rejects stale jobs. A later explicit consent creates a new generation and may reimport. ATM, bank-to-bank, and brokerage movements remain transfer candidates; brokerage evidence cannot create contribution principal without the existing deterministic confirmation. Raw Open Banking ciphertext uses AES-256-GCM and expires after 30 days. No automatic reconciliation adjustment is allowed.
 
+## ADR-038 — Secure Manual Enable Banking Evidence Boundary
+
+**Status:** Accepted
+
+**Decision:** Stage 8.1 uses five-minute RS256 application JWTs from an external mode-0600 private key and Enable Banking's redirect/session exchange. Authorization state is random, retained only as a SHA-256 hash, expires after 15 minutes, and is atomically consumed once. Session IDs, account hashes and aliases, display hints, and session-scoped continuations are AES-256-GCM encrypted with HKDF-separated subkeys and authenticated owner/connection/run metadata. Every provider response is durably encrypted before decoding. The manual diagnostic command requests `strategy=longest`, drains empty continuation pages, and records only provider evidence/revisions.
+
+**Reasoning:** The secure pre-canonical boundary must prove authentication, identity, paging, replay, encryption, and provider shape without letting incomplete or ambiguous observations change financial authority. Keeping authorization exchange and session deletion non-retryable after indeterminate network outcomes prevents duplicated external mutations. A manual scan is sufficient to validate the provider boundary before scheduling and canonical import policy are implemented.
+
+**Consequences:** Stage 8.1 is `READY_FOR_STAGE_8_2` after deterministic offline validation. Optional sandbox/live validation remains separately `BLOCKED_ON_LIVE_ENABLE_BANKING_ACCESS` until credentials exist. No account entry, income, consumption, transfer confirmation, investment principal, input version, recalculation, recommendation, or job is created. Explicit disconnect revokes the provider session and erases usable local session aliases; full account-scoped purge remains Stage 8.2 or later.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
