@@ -416,13 +416,31 @@ Every response is AES-256-GCM encrypted and committed before decoding. Receipt f
 
 **Consequences:** Stage 7 is `READY_FOR_PORTFOLIO_MANAGER_SYNC`. Operators invoke `pnpm portfolio-manager:sync`; normal worker startup is unchanged. The v1 limitations are explicit: no P/L, distributions, fees, historical valuations, FX provenance, MIC/exchange identity, or provider writes. Non-EUR authority remains blocked on the existing FX decision. Canonical activation and scheduling remain later work, and the confirmed-principal-only market-movement interface is unchanged.
 
+## ADR-036 — Enable Banking Restricted Swedbank Latvia Binding
+
+**Status:** Accepted
+
+**Decision:** Stage 8 binds one personal Swedbank Latvia EUR account through Enable Banking restricted production. Application authentication uses RS256 JWTs; bank authorization uses Enable Banking's redirect/session flow and bank-controlled SCA. Stable account identity is `identification_hash`; session `uid` is an encrypted alias. Stable transaction identity requires `entry_reference`; provider `transaction_id` is not authority. Initial/reconnect scans use `longest`, while continuation keys are page state valid only inside the current session. Coverage begins at the earliest fully drained returned booked date.
+
+**Reasoning:** Enable Banking explicitly documents Swedbank Latvia, sandbox support, and restricted production for the operator's own linked accounts. Direct Swedbank requires regulated TPP status. Other evaluated aggregators either require commercial onboarding or do not publicly prove both exact Swedbank Latvia coverage and personal production feasibility. Binding the actual provider semantics avoids pretending that OAuth refresh tokens, PKCE, stable IDs, history depth, or incremental cursors exist when they do not.
+
+**Consequences:** Stage 8.1 must quarantine records without `entry_reference`, treat changed-ID pending/booked records only as candidates, preserve absence as non-deletion, and request user reauthorization on expiry or `EXPIRED_SESSION`. Normal history authority is limited to the fully proven coverage interval; rolling metrics remain partial until their entire window is covered. Webhooks may update consent state but never create financial facts. Public/multi-user deployment requires a new access and pricing review.
+
+## ADR-037 — EUR Bank Authority, Reconciliation, Disconnect, and Purge
+
+**Status:** Accepted
+
+**Decision:** Stage 8 activates exactly one EUR account. The booked EUR account movement is authoritative money; original/instructed currency and exchange metadata are provenance only. Non-EUR accounts cannot be activated until the general FX decision is resolved. Latest booked provider balance reconciles against canonical entries at the same cutoff; incomplete, stale, pending-ambiguous, unavailable, or materially mismatched results suppress authority-dependent recommendations. Disconnect revokes access and preserves facts. Explicit purge is account-scoped and removes provider-derived raw, operational, canonical, relationship, and derived data, then recalculates once from the earliest removed effective date.
+
+**Reasoning:** The owner and reporting currency are EUR, so a separate market FX provider is unnecessary for the bank's authoritative EUR account movement. Blocking non-EUR activation closes Stage 8 safely without weakening ADR-004. Separating disconnect from purge preserves explainable history while allowing explicit erasure. Account scope is the narrowest understandable unit for the single-account V1.
+
+**Consequences:** Purge retains only a non-reconstructable audit event and a retired internal connection generation that rejects stale jobs. A later explicit consent creates a new generation and may reimport. ATM, bank-to-bank, and brokerage movements remain transfer candidates; brokerage evidence cannot create contribution principal without the existing deterministic confirmation. Raw Open Banking ciphertext uses AES-256-GCM and expires after 30 days. No automatic reconciliation adjustment is allowed.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
 | --- | --- | --- | --- |
-| Open Banking provider and history depth | Provider coverage, PSD2 access, stable IDs, pending records, consent renewal, and pricing must be verified for Swedbank Latvia. | Product/engineering | Before Stage 8 |
-| FX provider and missing-rate policy | Availability, licensing, weekend rates, corrections, and portfolio FX attribution need evaluation. | Product/engineering | Before non-EUR ingestion |
-| Imported-data deletion scope | FRD does not say whether deletion is per record, account, connection, or all data; re-import suppression and audit retention depend on it. | Product | Before Stage 8 |
+| General non-EUR FX provider and missing-rate policy | Stage 8 is safely EUR-only under ADR-037. A future provider still needs licensing, weekend-rate, correction, and portfolio-attribution decisions before any non-EUR account becomes authoritative. | Product/engineering | Before non-EUR ingestion |
 | Numerical policy calibration | Reserve months, materiality, Cash Drag threshold, recommendation increments, and forecast assumptions remain provisional configurable defaults needing synthetic/user validation. Pay-cycle and Step-Up algorithms are accepted. | Product | During Stages 3–5 |
 | Liabilities and opening balances | V1 may omit liabilities, but Net Worth start-date and historical reconciliation need a chosen cutover policy. | Product | Before Stage 2 completion |
 | AI retention and region | Provider, model, zero-retention availability, data region, and user consent are not selected. | Product/security | Before Stage 11 |

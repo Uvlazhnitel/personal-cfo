@@ -5,6 +5,7 @@
   "type": "module",
   "exports": {
     ".": "./src/index.ts",
+    "./open-banking/enable-banking": "./src/open-banking/enable-banking/index.ts",
     "./portfolio/portfolio-manager": "./src/portfolio/portfolio-manager/index.ts",
     "./portfolio/sharesight": "./src/portfolio/sharesight/index.ts"
   },

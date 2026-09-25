@@ -131,6 +131,8 @@ For each transaction, it should ideally store:
 
 The integration is expected to use an Open Banking provider.
 
+V1 binds this requirement to Enable Banking restricted production for one owner-controlled Swedbank Latvia EUR account. Provider observations require stable bank evidence before canonicalization; incomplete history and ambiguous identity remain explicitly partial or quarantined.
+
 The system must not store the user’s banking password.
 
 ---

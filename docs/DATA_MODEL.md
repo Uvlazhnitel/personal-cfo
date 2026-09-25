@@ -98,6 +98,16 @@ Deduplication is layered:
 
 Payload hashes detect exact replay but are not sufficient identity because providers may reorder or enrich fields. Deleting and reconnecting a source must not bypass deduplication without an explicit import-reset operation.
 
+### Enable Banking / Swedbank observations
+
+Stage 8.0 binds one EUR Swedbank Latvia account through Enable Banking. `BankProviderAccount` uses `(provider, owner, identification_hash)` as its stable identity; the provider account `uid` belongs to one consent session and is stored only as an encrypted alias. `BankBalanceObservation` retains exact amount, ISO balance type, provider cutoff, and last committed entry reference. `ITBD`, then `CLBD` on an equal cutoff, is ledger reconciliation authority; available balances remain liquidity evidence.
+
+`BankTransactionObservation` is provider evidence, not `FinancialTransaction` or `AccountEntry`. Its source is `(account identification_hash, entry_reference)`. Same source and canonical SHA-256 fingerprint is replay; same source and changed fingerprint is a revision. Provider `transaction_id` may change and is never source identity. A missing entry reference is quarantined rather than replaced by an amount/date/description fingerprint.
+
+`PDNG` and `HOLD` observations never enter historical income, consumption, CCR, or Net Worth. Pending debits may reduce projected operational cash; pending credits cannot increase Safe to Invest. The same entry reference changing to `BOOK` is a deterministic revision. A changed or missing identifier may form a seven-day exact-economic candidate but is never auto-confirmed. Disappearance is not deletion.
+
+`BankHistoryCoverage` becomes complete only after every session-scoped continuation page for its closed interval is durably received and normalized. Initial/reconnect scans use the provider's `longest` strategy; later consent sessions establish a new scan rather than reuse an old continuation key. Metrics whose full input period predates the proven cutover are partial or unavailable.
+
 Pending entries do not enter historical income, spending, CCR, or Net Worth snapshots. Pending debits reduce projected operational cash; pending credits do not increase Safe to Invest. When booked, a matched pending transaction is superseded. Reversed records remain auditable and their booked financial effect is neutralized by a linked reversal.
 
 ## Explicit Financial Treatments
@@ -217,4 +227,8 @@ Engine results are normalized JSONB caches with sorted keys and decimal-string b
 
 ## Deletion and Retention Boundary
 
-Disconnecting revokes tokens and stops synchronization. Purging imported data must remove raw payloads, canonical provider-derived records, snapshots, and AI text derived solely from that connection, then recalculate remaining history. Minimal non-sensitive security audit records may remain. Whether V1 supports individual imported-record deletion or only disconnect-and-purge is an open product decision; implementation must settle re-import suppression and cascading semantics before the Open Banking milestone.
+Disconnect and purge are distinct. Disconnect closes the provider session when supported, removes usable local credentials, and stops synchronization while preserving canonical history and non-secret audit provenance.
+
+Bank-data purge is account-scoped in V1. It removes encrypted receipts, sync state, provider observations, imported canonical transactions and entries, classifications, bank-derived transfer/reconciliation links, and derived snapshots/recommendations. It also invalidates contribution confirmations that depended on purged bank evidence without deleting independent portfolio evidence. One input-version increment and recalculation request rebuild remaining history from the earliest removed effective date.
+
+Purge retains only a non-reconstructable audit event containing internal command/connection-generation identity, time, safe counts, and hashes. The retired generation rejects late work. A new explicit consent creates a new generation and may import again. Hiding rows is not purge, and individual-record deletion is not supported in V1.
