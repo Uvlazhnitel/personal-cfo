@@ -2,7 +2,7 @@
 
 ## Status and boundary
 
-Stage 8.0 selects Enable Banking restricted production for one owner-controlled Swedbank Latvia EUR account. The binding is `enable-banking-swedbank-lv-v1` and is ready for a later live adapter. This stage contains only DTO validation, normalization contracts, identity rules, sanitized fixtures, and policy. It performs no network request, consent callback, persistence, job scheduling, or canonical ledger mutation.
+Stage 8.0 selected Enable Banking restricted production for one owner-controlled Swedbank Latvia EUR account. Stage 8.1 implements the server-only binding `enable-banking-swedbank-lv-v1`: RS256 application authentication, state-protected redirect/session exchange, explicit EUR account binding, encrypted receipts, and a manual read-only diagnostic scan. It performs no job scheduling or canonical ledger mutation.
 
 The production assumption is deliberately narrow: one non-commercial user links only their own allowlisted account. Public or multi-user operation requires a new access, licensing, and pricing review.
 
@@ -73,7 +73,7 @@ This matrix classifies only facts provable from public official documentation fo
 | Consent identity/expiry | `DIRECT` | Authorization/session IDs and actual `access.valid_until`. |
 | Renewal/reconnection | `DERIVED` | Expiry or `EXPIRED_SESSION` requires user reauthorization. |
 | Rate limit | `UNAVAILABLE` | No numeric Enable Banking client limit is published. Honor `429`/`Retry-After`. |
-| Polling | `DIRECT` | Account endpoints are read APIs; Stage 8.1 schedules at most one unattended daily run. |
+| Polling | `DIRECT` | Account endpoints are read APIs; Stage 8.1 is manual. A later scheduled stage may run at most once daily. |
 | Webhooks | `DIRECT` | Signed notifications may update session state; never financial facts. |
 | Sandbox | `DIRECT` | Swedbank Latvia sandbox is documented. |
 | Restricted production | `DIRECT` | Own linked accounts only. |
@@ -105,7 +105,7 @@ Initial authorization and reconnect use `strategy=longest` immediately after aut
 
 Swedbank/PSD2 material supports a 90-day normal-history baseline; Enable Banking notes that longer history can be available briefly after authorization but varies by ASPSP and account. Personal CFO therefore never claims twelve months merely because `longest` was requested. Current Pay Cycle, rolling 3/6/12-month metrics, Cash Drag, and CCR are authoritative only when their complete required interval is proven. No CSV bootstrap is part of Stage 8.
 
-Ongoing Stage 8.1 polling is once daily for the single selected account and uses a recent overlapping window with `strategy=default`. Stored canonical history survives consent renewal, while the new session must re-establish account identity by `identification_hash`.
+Later scheduled polling may run once daily for the single selected account and use a recent overlapping window with `strategy=default`. Stage 8.1 deliberately performs only explicit manual `longest` scans. Stored canonical history survives consent renewal, while a new session must re-establish account identity by `identification_hash`.
 
 ## Pending, booked, and correction policy
 
@@ -141,8 +141,14 @@ Purge is account-scoped in V1. It removes encrypted receipts, checkpoints, provi
 
 Only a non-reconstructable audit event with internal command/generation identity, timestamp, safe counts, and hashes remains. The retired generation rejects stale jobs. A later explicit consent creates a new generation and may import the data again.
 
-## Stage 8.1 contract
+## Stage 8.1 secure client and manual evidence scan
 
-Stage 8.1 may add the RS256 client, state/callback/session flow, encrypted session persistence, account selection, durable encrypted receipts, initial `longest` scan, daily overlap polling, booked import commands, pending evidence, transfer candidates, reconciliation, consent renewal, disconnect, and account purge.
+The client implements `GET /aspsps`, `POST /auth`, `POST /sessions`, session/account/balance/transaction reads, and explicit session deletion using native `fetch`. Five-minute JWTs have `kid=application_id`, `iss=enablebanking.com`, and `aud=api.enablebanking.com`; the external RSA key and JWT are never persisted. Safe GETs use at most three attempts for timeout/network, `408`, `429`, and `5xx`, with bounded `Retry-After`. Authorization, code exchange, and deletion are never blindly retried after an indeterminate outcome.
 
-It may not add payment initiation, another bank/provider, a generic banking framework, full multi-currency reporting, AI categorization, Stage 9 UI, trading, or automatic investment.
+The callback accepts only one valid state and exactly one code or cancellation. Only the state hash is stored, and its pending-to-exchanging compare-and-set prevents replay. Provider session/account aliases become usable only after Swedbank Latvia personal-session identity and account-detail identity are validated. Account selection is explicit and restricted to one owner-scoped included EUR `balance_snapshot` bank account.
+
+`pnpm enable-banking:fetch` validates the active session and account, requests `strategy=longest`, and drains every continuation page, including empty pages. Each body is encrypted and committed before decoding. Continuations are encrypted current-session/run checkpoints; source/fingerprint equality is replay and changed fingerprint is revision. Records without `entry_reference` are quarantined, absence never deletes evidence, and `confirmedPrincipalsCreated` is always zero. The command logs only counts, enum/status summaries, and safe categories.
+
+Stage 8.1 is deterministically `READY_FOR_STAGE_8_2`; optional sandbox/live validation is separately `BLOCKED_ON_LIVE_ENABLE_BANKING_ACCESS`. Stage 8.2 retains scheduled ingestion, canonical booked imports, transfer confirmation, reconciliation activation, consent renewal UX, and full purge.
+
+Stage 8.1 adds no payment initiation, another bank/provider, generic banking framework, non-EUR activation, AI categorization, Stage 9 UI, trading, or automatic investment.

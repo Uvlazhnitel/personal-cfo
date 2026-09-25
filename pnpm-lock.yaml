@@ -44,6 +44,9 @@ importers:
       '@personal-cfo/domain':
         specifier: workspace:*
         version: link:../../packages/domain
+      '@personal-cfo/integrations':
+        specifier: workspace:*
+        version: link:../../packages/integrations
       next:
         specifier: 16.3.5
         version: 16.3.5(@types/node@24.13.4)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)

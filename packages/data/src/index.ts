@@ -4,6 +4,7 @@ export * from './database.js';
 export * from './debug-overview.js';
 export * from './errors.js';
 export * from './engine-runs.js';
+export * from './enable-banking.js';
 export * from './financial-facts.js';
 export * from './json-codec.js';
 export * from './jobs.js';

@@ -29,7 +29,9 @@ import {
   ENABLE_BANKING_BINDING_VERSION,
   ENABLE_BANKING_PROVIDER_ID,
   ENABLE_BANKING_TRANSACTION_STATUSES,
+  ENABLE_BANKING_SESSION_STATUSES,
   type EnableBankingAccountDto,
+  type EnableBankingAccountDetailsDto,
   type EnableBankingAccountNormalization,
   type EnableBankingAmountDto,
   type EnableBankingAuthorizedSessionDto,
@@ -37,6 +39,8 @@ import {
   type EnableBankingBalanceNormalization,
   type EnableBankingBalanceType,
   type EnableBankingBalancesDto,
+  type EnableBankingAspspsDto,
+  type EnableBankingAspspDto,
   type EnableBankingExactDecimal,
   type EnableBankingFieldClassification,
   type EnableBankingNormalizationContext,
@@ -45,6 +49,9 @@ import {
   type EnableBankingTransactionNormalization,
   type EnableBankingTransactionStatus,
   type EnableBankingTransactionsDto,
+  type EnableBankingSessionDto,
+  type EnableBankingSessionStatus,
+  type EnableBankingStartAuthorizationDto,
 } from './types.js';
 
 type UnknownRecord = Record<string, unknown>;
@@ -190,16 +197,95 @@ function parseAccount(value: unknown): EnableBankingAccountDto {
   });
 }
 
+function psuType(value: unknown, label: string): 'personal' | 'business' {
+  if (value !== 'personal' && value !== 'business') {
+    return invalid('invalid_psu_type', `${label} is unsupported.`);
+  }
+  return value;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) {
+    return invalid('invalid_integer', `${label} must be a positive integer.`);
+  }
+  return value;
+}
+
+function authenticationApproach(value: unknown): 'REDIRECT' | 'DECOUPLED' | 'EMBEDDED' {
+  if (value !== 'REDIRECT' && value !== 'DECOUPLED' && value !== 'EMBEDDED') {
+    return invalid('invalid_authentication_approach', 'ASPSP authentication approach is invalid.');
+  }
+  return value;
+}
+
+function parseAspsp(value: unknown): EnableBankingAspspDto {
+  const item = record(value, 'ASPSP');
+  const methods = array(item['auth_methods'] ?? [], 'ASPSP authentication methods').map(
+    (method): EnableBankingAspspDto['authMethods'][number] => {
+      const parsed = record(method, 'ASPSP authentication method');
+      return Object.freeze({
+        name: string(parsed['name'], 'Authentication method name', 128),
+        psuType: psuType(parsed['psu_type'], 'Authentication method PSU type'),
+        approach: authenticationApproach(parsed['approach']),
+      });
+    },
+  );
+  const psuTypes = array(item['psu_types'], 'ASPSP PSU types').map((value) =>
+    psuType(value, 'ASPSP PSU type'),
+  );
+  return Object.freeze({
+    name: string(item['name'], 'ASPSP name', 128),
+    country: string(item['country'], 'ASPSP country', 2),
+    psuTypes: Object.freeze(psuTypes),
+    maximumConsentValiditySeconds: positiveInteger(
+      item['maximum_consent_validity'],
+      'Maximum consent validity',
+    ),
+    authMethods: Object.freeze(methods),
+  });
+}
+
+export function decodeEnableBankingAspsps(rawJson: string): EnableBankingAspspsDto {
+  const root = record(parseJson(rawJson), 'ASPSP response');
+  return Object.freeze({
+    aspsps: Object.freeze(array(root['aspsps'], 'ASPSPs').map(parseAspsp)),
+  });
+}
+
+export function decodeEnableBankingStartAuthorization(
+  rawJson: string,
+): EnableBankingStartAuthorizationDto {
+  const root = record(parseJson(rawJson), 'Authorization response');
+  const url = string(root['url'], 'Authorization URL', 4096);
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return invalid('invalid_authorization_url', 'Authorization URL is invalid.');
+  }
+  if (
+    parsed.protocol !== 'https:' ||
+    (parsed.hostname !== 'enablebanking.com' && !parsed.hostname.endsWith('.enablebanking.com'))
+  ) {
+    return invalid(
+      'invalid_authorization_url',
+      'Authorization URL must use an Enable Banking HTTPS origin.',
+    );
+  }
+  return Object.freeze({
+    url: parsed.toString(),
+    authorizationId: uuid(root['authorization_id'], 'Authorization ID'),
+    psuIdHash: optionalString(root['psu_id_hash'], 'PSU ID hash', 512),
+  });
+}
+
 export function decodeEnableBankingAuthorizedSession(
   rawJson: string,
 ): EnableBankingAuthorizedSessionDto {
   const root = record(parseJson(rawJson), 'Authorized session');
   const aspsp = record(root['aspsp'], 'ASPSP');
   const access = record(root['access'], 'Session access');
-  const psuType = root['psu_type'];
-  if (psuType !== 'personal' && psuType !== 'business') {
-    return invalid('invalid_psu_type', 'Session PSU type is unsupported.');
-  }
+  const parsedPsuType = psuType(root['psu_type'], 'Session PSU type');
   return Object.freeze({
     sessionId: uuid(root['session_id'], 'Session ID'),
     accounts: Object.freeze(array(root['accounts'], 'Session accounts').map(parseAccount)),
@@ -207,8 +293,65 @@ export function decodeEnableBankingAuthorizedSession(
       name: string(aspsp['name'], 'ASPSP name', 128),
       country: string(aspsp['country'], 'ASPSP country', 2),
     }),
-    psuType,
+    psuType: parsedPsuType,
     validUntil: utcInstant(access['valid_until'], 'Consent expiry'),
+  });
+}
+
+function sessionStatus(value: unknown): EnableBankingSessionStatus {
+  if (!ENABLE_BANKING_SESSION_STATUSES.includes(value as EnableBankingSessionStatus)) {
+    return invalid('invalid_session_status', 'Session status is unsupported.');
+  }
+  return value as EnableBankingSessionStatus;
+}
+
+export function decodeEnableBankingSession(rawJson: string): EnableBankingSessionDto {
+  const root = record(parseJson(rawJson), 'Session response');
+  const access = record(root['access'], 'Session access');
+  const aspsp = record(root['aspsp'], 'Session ASPSP');
+  return Object.freeze({
+    status: sessionStatus(root['status']),
+    accountAliases: Object.freeze(
+      array(root['accounts_data'], 'Session account aliases').map((value) => {
+        const alias = record(value, 'Session account alias');
+        return Object.freeze({
+          uid: uuid(alias['uid'], 'Session account UID'),
+          identificationHash: stableHash(
+            alias['identification_hash'],
+            'Session account identification hash',
+          ),
+        });
+      }),
+    ),
+    aspsp: Object.freeze({
+      name: string(aspsp['name'], 'ASPSP name', 128),
+      country: string(aspsp['country'], 'ASPSP country', 2),
+    }),
+    psuType: psuType(root['psu_type'], 'Session PSU type'),
+    validUntil: utcInstant(access['valid_until'], 'Session expiry'),
+    createdAt: utcInstant(root['created'], 'Session creation time'),
+    authorizedAt: optionalInstant(root['authorized'], 'Session authorization time'),
+    closedAt: optionalInstant(root['closed'], 'Session close time'),
+  });
+}
+
+export function decodeEnableBankingAccountDetails(rawJson: string): EnableBankingAccountDetailsDto {
+  const root = record(parseJson(rawJson), 'Account details');
+  const account = parseAccount(root);
+  const accountId = root['account_id'];
+  let hint: string | null = null;
+  if (accountId !== undefined && accountId !== null) {
+    const identifier = record(accountId, 'Account identifier');
+    hint = optionalString(
+      identifier['iban'] ?? identifier['identification'],
+      'Account identifier',
+      256,
+    );
+  }
+  return Object.freeze({
+    ...account,
+    displayName: optionalString(root['name'] ?? root['details'], 'Account display name', 512),
+    accountHint: hint,
   });
 }
 
@@ -798,6 +941,7 @@ export const ENABLE_BANKING_BINDING: EnableBankingProviderBinding = Object.freez
     startAuthorization: '/auth',
     authorizeSession: '/sessions',
     session: '/sessions/{session_id}',
+    accountDetails: '/accounts/{account_id}/details',
     balances: '/accounts/{account_id}/balances',
     transactions: '/accounts/{account_id}/transactions',
   }),

@@ -17,6 +17,7 @@
     "db:generate": "pnpm --filter @personal-cfo/data run db:generate",
     "db:migrate": "pnpm --filter @personal-cfo/worker run cli:migrate",
     "db:check": "pnpm --filter @personal-cfo/data run db:check",
+    "enable-banking:fetch": "pnpm --filter @personal-cfo/worker run cli:enable-banking-fetch",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "synthetic:import": "pnpm --filter @personal-cfo/worker run cli:synthetic-import",
     "portfolio-manager:sync": "pnpm --filter @personal-cfo/worker run cli:portfolio-manager-sync",

@@ -15,6 +15,7 @@
   "dependencies": {
     "@personal-cfo/data": "workspace:*",
     "@personal-cfo/domain": "workspace:*",
+    "@personal-cfo/integrations": "workspace:*",
     "next": "16.3.5",
     "react": "19.3.0",
     "react-dom": "19.3.0"

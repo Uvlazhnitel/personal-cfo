@@ -1,6 +1,6 @@
 # Personal CFO
 
-Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, and manually invoked read-only portfolio evidence adapters. Portfolio Manager is the selected self-hosted production provider; Sharesight remains an independent reference/validation provider. Bank activation, canonical portfolio activation, voice, AI, proactive notifications, and the product PWA are not implemented.
+Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, manually invoked read-only portfolio evidence adapters, and a secure evidence-only Enable Banking connection for one Swedbank Latvia EUR account. Portfolio Manager is the selected self-hosted production portfolio provider; Sharesight remains an independent reference/validation provider. Canonical bank and portfolio activation, voice, AI, proactive notifications, and the product PWA are not implemented.
 
 ## Requirements
 
@@ -44,6 +44,8 @@ Telegram remains disabled when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`,
 Sharesight configuration is read only by `pnpm sharesight:sync`, so normal worker startup remains unaffected. The command stores encrypted validation receipts and provider evidence but never writes canonical valuations or confirmed investment principal. See [`docs/PORTFOLIO_PROVIDER_SHARESIGHT.md`](docs/PORTFOLIO_PROVIDER_SHARESIGHT.md) for required variables, authority boundaries, and current live-validation prerequisites.
 
 Portfolio Manager configuration is read only by `pnpm portfolio-manager:sync`; normal worker startup remains unaffected. The manual command requires the v1 integration contract, stores every response as an encrypted receipt before decoding, resumes the provider cursor atomically, and produces evidence only. It never writes canonical valuations, confirmed principal, input versions, recalculations, recommendations, or financial jobs. See [`docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md`](docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md).
+
+Enable Banking configuration is loaded only by the connection API routes and `pnpm enable-banking:fetch`. The application RSA key must be an external absolute-path mode-0600 file; the 32-byte data key encrypts session aliases, page continuations, display hints, and 30-day raw receipts. The authenticated connect route starts bank-controlled SCA, the public callback consumes a single-use 15-minute state, and account binding is an explicit authenticated CSRF-protected action. The manual fetch always requests `strategy=longest`, drains all continuation pages, and persists evidence only—never canonical entries, flows, contributions, versions, recalculations, recommendations, or jobs. See [`docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md`](docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md).
 
 ## Docker Compose
 

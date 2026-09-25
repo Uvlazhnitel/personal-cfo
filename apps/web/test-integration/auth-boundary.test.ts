@@ -2,6 +2,9 @@ import { NextRequest } from 'next/server.js';
 import { describe, expect, it } from 'vitest';
 
 import { POST as commandPost } from '../src/app/api/v1/commands/[command]/route.js';
+import { GET as callbackGet } from '../src/app/api/v1/open-banking/enable-banking/callback/route.js';
+import { POST as connectPost } from '../src/app/api/v1/open-banking/enable-banking/connect/route.js';
+import { POST as disconnectPost } from '../src/app/api/v1/open-banking/enable-banking/disconnect/route.js';
 import { authConfiguration } from '../src/server/auth.js';
 
 describe('web authentication boundary', () => {
@@ -43,5 +46,24 @@ describe('web authentication boundary', () => {
       params: Promise.resolve({ command: 'sinking-allocation' }),
     });
     expect(response.status).toBe(403);
+  });
+
+  it('protects Enable Banking mutations and rejects malformed public callbacks', async () => {
+    const connect = new NextRequest(
+      'http://127.0.0.1:8080/api/v1/open-banking/enable-banking/connect',
+      { method: 'POST' },
+    );
+    expect((await connectPost(connect)).status).toBe(403);
+    const disconnect = new NextRequest(
+      'http://127.0.0.1:8080/api/v1/open-banking/enable-banking/disconnect',
+      { method: 'POST' },
+    );
+    expect((await disconnectPost(disconnect)).status).toBe(403);
+    const callback = new NextRequest(
+      'http://attacker.example/api/v1/open-banking/enable-banking/callback?state=one&state=two&code=code',
+    );
+    const response = await callbackGet(callback);
+    expect(response.status).toBe(303);
+    expect(response.headers.get('location')).toBe('https://localhost/debug?open_banking=failed');
   });
 });

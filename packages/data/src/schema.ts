@@ -1203,3 +1203,257 @@ export const portfolioManagerSourceRevisions = pgTable(
     ),
   ],
 );
+
+export const enableBankingConnections = pgTable(
+  'enable_banking_connections',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    generation: uuid('generation').notNull(),
+    status: text('status').notNull(),
+    applicationIdHash: text('application_id_hash').notNull(),
+    sessionIdCiphertext: text('session_id_ciphertext'),
+    sessionIdIv: text('session_id_iv'),
+    sessionIdAuthTag: text('session_id_auth_tag'),
+    sessionGeneration: uuid('session_generation'),
+    consentExpiresAt: instant('consent_expires_at'),
+    activeRunId: uuid('active_run_id'),
+    leaseId: uuid('lease_id'),
+    leaseExpiresAt: instant('lease_expires_at'),
+    lastFailureCategory: text('last_failure_category'),
+    createdAt: instant('created_at').notNull(),
+    updatedAt: instant('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_connection_owner_uq').on(table.ownerId),
+    uniqueIndex('enable_banking_connection_generation_uq').on(table.generation),
+    check(
+      'enable_banking_connection_status_ck',
+      sql`${table.status} in ('disconnected','connecting','active','reauth_required','error','revoked')`,
+    ),
+    check(
+      'enable_banking_session_ciphertext_shape_ck',
+      sql`(${table.sessionIdCiphertext} is null and ${table.sessionIdIv} is null and ${table.sessionIdAuthTag} is null and ${table.sessionGeneration} is null and ${table.consentExpiresAt} is null) or (${table.sessionIdCiphertext} is not null and ${table.sessionIdIv} is not null and ${table.sessionIdAuthTag} is not null and ${table.sessionGeneration} is not null and ${table.consentExpiresAt} is not null)`,
+    ),
+    check(
+      'enable_banking_connection_lease_shape_ck',
+      sql`(${table.activeRunId} is null and ${table.leaseId} is null and ${table.leaseExpiresAt} is null) or (${table.activeRunId} is not null and ${table.leaseId} is not null and ${table.leaseExpiresAt} is not null)`,
+    ),
+  ],
+);
+
+export const enableBankingRuns = pgTable(
+  'enable_banking_runs',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    kind: text('kind').notNull(),
+    status: text('status').notNull(),
+    strategy: text('strategy'),
+    sessionGeneration: uuid('session_generation'),
+    providerAccountId: uuid('provider_account_id'),
+    continuationCiphertext: text('continuation_ciphertext'),
+    continuationIv: text('continuation_iv'),
+    continuationAuthTag: text('continuation_auth_tag'),
+    continuationHash: text('continuation_hash'),
+    counts: jsonb('counts').notNull().default({}),
+    coverageFrom: date('coverage_from'),
+    coverageThrough: date('coverage_through'),
+    startedAt: instant('started_at').notNull(),
+    completedAt: instant('completed_at'),
+    failureCategory: text('failure_category'),
+  },
+  (table) => [
+    index('enable_banking_runs_owner_started_idx').on(table.ownerId, table.startedAt),
+    check(
+      'enable_banking_run_kind_ck',
+      sql`${table.kind} in ('authorization','diagnostic_fetch','disconnect')`,
+    ),
+    check(
+      'enable_banking_run_status_ck',
+      sql`${table.status} in ('pending','running','completed','failed','indeterminate')`,
+    ),
+    check(
+      'enable_banking_run_continuation_shape_ck',
+      sql`(${table.continuationCiphertext} is null and ${table.continuationIv} is null and ${table.continuationAuthTag} is null and ${table.continuationHash} is null) or (${table.continuationCiphertext} is not null and ${table.continuationIv} is not null and ${table.continuationAuthTag} is not null and ${table.continuationHash} is not null)`,
+    ),
+  ],
+);
+
+export const enableBankingAuthorizationAttempts = pgTable(
+  'enable_banking_authorization_attempts',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => enableBankingRuns.id),
+    stateHash: text('state_hash').notNull(),
+    status: text('status').notNull(),
+    expiresAt: instant('expires_at').notNull(),
+    claimedAt: instant('claimed_at'),
+    completedAt: instant('completed_at'),
+    failureCategory: text('failure_category'),
+    createdAt: instant('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_authorization_state_uq').on(table.stateHash),
+    index('enable_banking_authorization_owner_status_idx').on(table.ownerId, table.status),
+    check(
+      'enable_banking_authorization_status_ck',
+      sql`${table.status} in ('pending','exchanging','completed','cancelled','failed','expired','indeterminate')`,
+    ),
+  ],
+);
+
+export const enableBankingProviderAccounts = pgTable(
+  'enable_banking_provider_accounts',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    stableAccountKey: text('stable_account_key').notNull(),
+    identificationHashCiphertext: text('identification_hash_ciphertext').notNull(),
+    identificationHashIv: text('identification_hash_iv').notNull(),
+    identificationHashAuthTag: text('identification_hash_auth_tag').notNull(),
+    accountUidCiphertext: text('account_uid_ciphertext'),
+    accountUidIv: text('account_uid_iv'),
+    accountUidAuthTag: text('account_uid_auth_tag'),
+    displayHintCiphertext: text('display_hint_ciphertext'),
+    displayHintIv: text('display_hint_iv'),
+    displayHintAuthTag: text('display_hint_auth_tag'),
+    sessionGeneration: uuid('session_generation'),
+    currency: text('currency').notNull(),
+    canonicalAccountId: uuid('canonical_account_id').references(() => accounts.id),
+    observedAt: instant('observed_at').notNull(),
+    updatedAt: instant('updated_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_provider_account_identity_uq').on(
+      table.ownerId,
+      table.stableAccountKey,
+    ),
+    uniqueIndex('enable_banking_provider_account_binding_uq')
+      .on(table.ownerId, table.canonicalAccountId)
+      .where(sql`${table.canonicalAccountId} is not null`),
+    index('enable_banking_provider_account_connection_idx').on(table.connectionId),
+    check(
+      'enable_banking_display_hint_shape_ck',
+      sql`(${table.displayHintCiphertext} is null and ${table.displayHintIv} is null and ${table.displayHintAuthTag} is null) or (${table.displayHintCiphertext} is not null and ${table.displayHintIv} is not null and ${table.displayHintAuthTag} is not null)`,
+    ),
+    check(
+      'enable_banking_account_uid_shape_ck',
+      sql`(${table.accountUidCiphertext} is null and ${table.accountUidIv} is null and ${table.accountUidAuthTag} is null and ${table.sessionGeneration} is null) or (${table.accountUidCiphertext} is not null and ${table.accountUidIv} is not null and ${table.accountUidAuthTag} is not null and ${table.sessionGeneration} is not null)`,
+    ),
+  ],
+);
+
+export const enableBankingRawReceipts = pgTable(
+  'enable_banking_raw_receipts',
+  {
+    id: uuid('id').primaryKey(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => enableBankingRuns.id),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    endpoint: text('endpoint').notNull(),
+    method: text('method').notNull(),
+    requestKey: text('request_key').notNull(),
+    requestCursorHash: text('request_cursor_hash'),
+    httpStatus: integer('http_status').notNull(),
+    receivedAt: instant('received_at').notNull(),
+    payloadSha256: text('payload_sha256').notNull(),
+    payloadCiphertext: text('payload_ciphertext'),
+    payloadIv: text('payload_iv'),
+    payloadAuthTag: text('payload_auth_tag'),
+    payloadExpiresAt: instant('payload_expires_at').notNull(),
+    status: text('status').notNull(),
+    normalizationVersion: text('normalization_version').notNull(),
+    sourceIds: jsonb('source_ids').notNull().default([]),
+    revisionIds: jsonb('revision_ids').notNull().default([]),
+    failureCategory: text('failure_category'),
+    processedAt: instant('processed_at'),
+  },
+  (table) => [
+    index('enable_banking_receipt_run_idx').on(table.runId, table.receivedAt),
+    index('enable_banking_receipt_pending_idx').on(
+      table.ownerId,
+      table.connectionId,
+      table.status,
+      table.receivedAt,
+    ),
+    index('enable_banking_receipt_expiry_idx').on(table.payloadExpiresAt),
+    check(
+      'enable_banking_receipt_endpoint_ck',
+      sql`${table.endpoint} in ('aspsps','authorization','session_exchange','session','account_details','balances','transactions','disconnect')`,
+    ),
+    check('enable_banking_receipt_method_ck', sql`${table.method} in ('GET','POST','DELETE')`),
+    check(
+      'enable_banking_receipt_status_ck',
+      sql`${table.status} in ('received','normalized','quarantined','failed')`,
+    ),
+    check(
+      'enable_banking_receipt_ciphertext_shape_ck',
+      sql`(${table.payloadCiphertext} is null and ${table.payloadIv} is null and ${table.payloadAuthTag} is null) or (${table.payloadCiphertext} is not null and ${table.payloadIv} is not null and ${table.payloadAuthTag} is not null)`,
+    ),
+  ],
+);
+
+export const enableBankingSourceRevisions = pgTable(
+  'enable_banking_source_revisions',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    sourceKey: text('source_key').notNull(),
+    revisionSha256: text('revision_sha256').notNull(),
+    recordKind: text('record_kind').notNull(),
+    providerStatus: text('provider_status'),
+    receiptId: uuid('receipt_id')
+      .notNull()
+      .references(() => enableBankingRawReceipts.id),
+    firstSeenAt: instant('first_seen_at').notNull(),
+    lastSeenAt: instant('last_seen_at').notNull(),
+    isCurrent: boolean('is_current').notNull().default(true),
+  },
+  (table) => [
+    primaryKey({
+      columns: [table.ownerId, table.connectionId, table.sourceKey, table.revisionSha256],
+    }),
+    uniqueIndex('enable_banking_source_current_uq')
+      .on(table.ownerId, table.connectionId, table.sourceKey)
+      .where(sql`${table.isCurrent}`),
+    index('enable_banking_source_receipt_idx').on(table.receiptId),
+    check(
+      'enable_banking_source_kind_ck',
+      sql`${table.recordKind} in ('account','balance','transaction')`,
+    ),
+  ],
+);

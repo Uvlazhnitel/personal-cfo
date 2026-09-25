@@ -71,6 +71,13 @@
       "when": 1790192809045,
       "tag": "0009_portfolio_manager_adapter",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790356728003,
+      "tag": "0010_enable_banking_client",
+      "breakpoints": true
     }
   ]
 }

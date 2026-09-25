@@ -10,7 +10,7 @@ import type { DatabaseContext } from '../src/index.js';
 const databaseUrl = process.env['DATABASE_URL'];
 const suite = databaseUrl === undefined ? describe.skip : describe;
 
-suite('Stage 5 through Stage 7.2B migrations', () => {
+suite('Stage 5 through Stage 8.1 migrations', () => {
   let context: DatabaseContext;
   let temporaryMigrations: string;
   const sourceMigrations = resolve(process.cwd(), 'packages/data/migrations');
@@ -170,7 +170,13 @@ suite('Stage 5 through Stage 7.2B migrations', () => {
       join(sourceMigrations, `${portfolioManager.tag}.sql`),
       join(temporaryMigrations, basename(`${portfolioManager.tag}.sql`)),
     );
-    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await writeFile(
+      join(temporaryMigrations, 'meta/_journal.json'),
+      JSON.stringify({
+        ...fullJournal,
+        entries: fullJournal.entries.filter((entry) => entry.idx <= 9),
+      }),
+    );
     await migrateDatabase(context.db, temporaryMigrations);
     await migrateDatabase(context.db, temporaryMigrations);
 
@@ -196,5 +202,20 @@ suite('Stage 5 through Stage 7.2B migrations', () => {
         provider_portfolio_id: '293304',
       },
     ]);
+
+    const enableBanking = fullJournal.entries.find((entry) => entry.idx === 10);
+    if (enableBanking === undefined) throw new Error('Stage 8.1 migration is missing.');
+    await cp(
+      join(sourceMigrations, `${enableBanking.tag}.sql`),
+      join(temporaryMigrations, basename(`${enableBanking.tag}.sql`)),
+    );
+    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await migrateDatabase(context.db, temporaryMigrations);
+    await migrateDatabase(context.db, temporaryMigrations);
+
+    const enableBankingTables = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'enable_banking_%'",
+    );
+    expect(enableBankingTables.rows[0]?.count).toBe('6');
   });
 });
