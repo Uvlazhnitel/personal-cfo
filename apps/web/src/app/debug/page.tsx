@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation.js';
 import { SESSION_COOKIE } from '../../server/auth.js';
 import { databaseContext } from '../../server/database.js';
 import { loadAuthorizedDebugOverview } from '../../server/debug-access.js';
+import { ConnectBankButton } from './connect-bank-button.js';
 
 function Section({ title, value }: Readonly<{ title: string; value: unknown }>) {
   return (
@@ -24,6 +25,7 @@ export default async function DebugPage() {
     <main>
       <h1>Internal financial state</h1>
       <p>Persisted deterministic outputs only. No formulas run in this view.</p>
+      <ConnectBankButton />
       <Section title="Current input version" value={overview.currentInputVersion} />
       <Section title="Latest engine run" value={overview.latestRun} />
       <Section title="Canonical entity counts" value={overview.entityCounts} />

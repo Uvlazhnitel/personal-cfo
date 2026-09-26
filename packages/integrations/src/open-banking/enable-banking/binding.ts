@@ -211,6 +211,11 @@ function positiveInteger(value: unknown, label: string): number {
   return value;
 }
 
+function boolean(value: unknown, label: string): boolean {
+  if (typeof value !== 'boolean') return invalid('invalid_boolean', `${label} must be a boolean.`);
+  return value;
+}
+
 function authenticationApproach(value: unknown): 'REDIRECT' | 'DECOUPLED' | 'EMBEDDED' {
   if (value !== 'REDIRECT' && value !== 'DECOUPLED' && value !== 'EMBEDDED') {
     return invalid('invalid_authentication_approach', 'ASPSP authentication approach is invalid.');
@@ -224,7 +229,8 @@ function parseAspsp(value: unknown): EnableBankingAspspDto {
     (method): EnableBankingAspspDto['authMethods'][number] => {
       const parsed = record(method, 'ASPSP authentication method');
       return Object.freeze({
-        name: string(parsed['name'], 'Authentication method name', 128),
+        name: optionalString(parsed['name'], 'Authentication method name', 128),
+        hidden: boolean(parsed['hidden_method'], 'Authentication method hidden flag'),
         psuType: psuType(parsed['psu_type'], 'Authentication method PSU type'),
         approach: authenticationApproach(parsed['approach']),
       });

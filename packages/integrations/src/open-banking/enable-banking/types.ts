@@ -44,7 +44,8 @@ export type EnableBankingAspspDto = Readonly<{
   psuTypes: readonly ('personal' | 'business')[];
   maximumConsentValiditySeconds: number;
   authMethods: readonly Readonly<{
-    name: string;
+    name: string | null;
+    hidden: boolean;
     psuType: 'personal' | 'business';
     approach: 'REDIRECT' | 'DECOUPLED' | 'EMBEDDED';
   }>[];

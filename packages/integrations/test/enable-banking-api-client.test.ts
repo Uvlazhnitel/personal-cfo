@@ -86,7 +86,9 @@ describe('Enable Banking API client', () => {
             country: 'LV',
             psu_types: ['personal'],
             maximum_consent_validity: 15_552_000,
-            auth_methods: [{ name: 'redirect', psu_type: 'personal', approach: 'REDIRECT' }],
+            auth_methods: [
+              { hidden_method: false, psu_type: 'personal', approach: 'REDIRECT' },
+            ],
           },
         ],
       },
@@ -114,7 +116,11 @@ describe('Enable Banking API client', () => {
       return Promise.resolve(response(bodies.shift()));
     }) as typeof fetch;
     const api = client(fetchImplementation);
-    expect((await api.listAspsps()).value.aspsps[0]?.name).toBe('Swedbank');
+    const aspsp = (await api.listAspsps()).value.aspsps[0];
+    expect(aspsp?.name).toBe('Swedbank');
+    expect(aspsp?.authMethods).toEqual([
+      { name: null, hidden: false, psuType: 'personal', approach: 'REDIRECT' },
+    ]);
     expect((await api.getSession(sessionId)).value.status).toBe('AUTHORIZED');
     expect((await api.getAccountDetails(accountUid)).value.identificationHash).toBe(
       'stable-account-hash',
