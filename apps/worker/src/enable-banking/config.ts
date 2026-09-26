@@ -12,7 +12,41 @@ export type EnableBankingConfiguration = Readonly<{
   redirectUrl: string;
   dataKey: EnableBankingDataKey;
   baseUrl: string;
+  canonicalImportEnabled?: boolean;
 }>;
+
+export type EnableBankingScheduleConfiguration = Readonly<{
+  enabled: boolean;
+  cron: string;
+  timeZone: string;
+}>;
+
+function booleanFlag(environment: NodeJS.ProcessEnv, name: string): boolean {
+  const value = environment[name]?.trim().toLocaleLowerCase('en') ?? 'false';
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be true or false.`);
+}
+
+export function enableBankingScheduleConfiguration(
+  environment: NodeJS.ProcessEnv = process.env,
+): EnableBankingScheduleConfiguration {
+  const cron = environment['ENABLE_BANKING_SYNC_CRON']?.trim() || '15 3 * * *';
+  if (cron.split(/\s+/u).length !== 5) {
+    throw new Error('ENABLE_BANKING_SYNC_CRON must contain five cron fields.');
+  }
+  const timeZone = environment['ENABLE_BANKING_SYNC_TIME_ZONE']?.trim() || 'Europe/Riga';
+  try {
+    new Intl.DateTimeFormat('en', { timeZone }).format(new Date());
+  } catch {
+    throw new Error('ENABLE_BANKING_SYNC_TIME_ZONE is invalid.');
+  }
+  return Object.freeze({
+    enabled: booleanFlag(environment, 'ENABLE_BANKING_SYNC_ENABLED'),
+    cron,
+    timeZone,
+  });
+}
 
 function required(environment: NodeJS.ProcessEnv, name: string): string {
   const value = environment[name]?.trim();
@@ -66,5 +100,6 @@ export async function enableBankingConfiguration(
     redirectUrl,
     dataKey,
     baseUrl,
+    canonicalImportEnabled: booleanFlag(environment, 'ENABLE_BANKING_CANONICAL_IMPORT_ENABLED'),
   });
 }

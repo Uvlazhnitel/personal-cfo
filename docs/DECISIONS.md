@@ -446,6 +446,18 @@ Every response is AES-256-GCM encrypted and committed before decoding. Receipt f
 
 **Consequences:** Stage 8.1 is `READY_FOR_STAGE_8_2` after deterministic offline validation. Optional sandbox/live validation remains separately `BLOCKED_ON_LIVE_ENABLE_BANKING_ACCESS` until credentials exist. No account entry, income, consumption, transfer confirmation, investment principal, input version, recalculation, recommendation, or job is created. Explicit disconnect revokes the provider session and erases usable local session aliases; full account-scoped purge remains Stage 8.2 or later.
 
+## ADR-039 — Durable Bank Synchronization and Activation-Gated Canonical Import
+
+**Status:** Accepted — 2026-09-26
+
+**Decision:** One shared sync service powers explicit and scheduled Enable Banking runs. A new session performs a fully drained `longest` scan; recurring runs perform overlapping `default` scans with no cross-run provider cursor. Raw responses are encrypted before decoding, normalized observations are immutable and receipt-linked, closed coverage advances only after the scan completes, and absence never deletes facts. The daily dispatcher is disabled by default and creates one singleton job per connection generation and scheduled Europe/Riga day.
+
+Canonical import requires the deployment switch, verified stable account identity, booked stable-reference replay across completed scans, closed coverage, and explicit authenticated owner activation. Eligible exact-EUR booked observations become neutral external-flow transactions through the existing atomic financial-command boundary. Revisions append a compensating fact and optional replacement; they never overwrite history. Pending, unstable-identity, non-EUR, and ambiguous changed-ID records remain evidence or review candidates. The latest authoritative booked balance is reconciled at the same cutoff without synthetic adjustment, and non-reconciled status downgrades application completeness.
+
+**Reasoning:** Provider transport success alone cannot establish enough identity, history, or owner intent to mutate financial authority. Separating durable observation from gated activation permits live validation and replay proof without risking duplicate or misclassified facts. Reusing the financial command boundary preserves audit, input-version, recalculation, and job atomicity.
+
+**Consequences:** Deterministic acceptance advances Stage 8 to `READY_FOR_LIVE_BANK_VALIDATION`. Production canonical import remains off by default. Transfer review may resolve existing ambiguities, but portfolio principal still requires the Stage 7 confirmed canonical-transfer constructor. Account-scoped purge and live Swedbank acceptance remain explicit blockers before general availability; no scheduler setting can bypass them.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

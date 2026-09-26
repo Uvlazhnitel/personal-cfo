@@ -7,3 +7,5 @@ coverage/
 .env
 .env.*
 !.env.example
+/CREDENTIAL.txt
+/3b94b2ea-5a6d-41f8-b203-0afbe9ff28dc.pem

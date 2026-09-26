@@ -86,7 +86,7 @@ describe('Enable Banking API client', () => {
             country: 'LV',
             psu_types: ['personal'],
             maximum_consent_validity: 15_552_000,
-            auth_methods: [{ name: 'redirect', psu_type: 'personal', approach: 'REDIRECT' }],
+            auth_methods: [{ hidden_method: false, psu_type: 'personal', approach: 'REDIRECT' }],
           },
         ],
       },
@@ -114,7 +114,11 @@ describe('Enable Banking API client', () => {
       return Promise.resolve(response(bodies.shift()));
     }) as typeof fetch;
     const api = client(fetchImplementation);
-    expect((await api.listAspsps()).value.aspsps[0]?.name).toBe('Swedbank');
+    const aspsp = (await api.listAspsps()).value.aspsps[0];
+    expect(aspsp?.name).toBe('Swedbank');
+    expect(aspsp?.authMethods).toEqual([
+      { name: null, hidden: false, psuType: 'personal', approach: 'REDIRECT' },
+    ]);
     expect((await api.getSession(sessionId)).value.status).toBe('AUTHORIZED');
     expect((await api.getAccountDetails(accountUid)).value.identificationHash).toBe(
       'stable-account-hash',
@@ -126,6 +130,22 @@ describe('Enable Banking API client', () => {
     ).toBe('opaque-page-2');
     expect(calls.every((call) => call.authorization?.startsWith('Bearer ey') === true)).toBe(true);
     expect(calls[4]?.url).toContain('strategy=longest&continuation_key=opaque-page-1');
+  });
+
+  it('uses the explicit recurring default strategy without carrying a prior cursor', async () => {
+    const urls: string[] = [];
+    const fetchImplementation = vi.fn((url: string | URL | Request) => {
+      urls.push(url instanceof Request ? url.url : url.toString());
+      return Promise.resolve(response({ transactions: [], continuation_key: null }));
+    }) as typeof fetch;
+    await client(fetchImplementation).getTransactions({
+      accountUid,
+      continuationKey: null,
+      strategy: 'default',
+    });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('strategy=default');
+    expect(urls[0]).not.toContain('continuation_key');
   });
 
   it('does not retry authorization, session exchange, or disconnect requests', async () => {

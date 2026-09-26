@@ -44,7 +44,8 @@ export type EnableBankingAspspDto = Readonly<{
   psuTypes: readonly ('personal' | 'business')[];
   maximumConsentValiditySeconds: number;
   authMethods: readonly Readonly<{
-    name: string;
+    name: string | null;
+    hidden: boolean;
     psuType: 'personal' | 'business';
     approach: 'REDIRECT' | 'DECOUPLED' | 'EMBEDDED';
   }>[];
@@ -165,6 +166,53 @@ export type EnableBankingTransactionDto = Readonly<{
 export type EnableBankingTransactionsDto = Readonly<{
   transactions: readonly EnableBankingTransactionDto[];
   continuationKey: string | null;
+}>;
+
+export type EnableBankingTransactionFetchStrategy = 'longest' | 'default';
+
+export type EnableBankingActivationRequirement =
+  | 'deployment_disabled'
+  | 'owner_not_activated'
+  | 'account_identity_unverified'
+  | 'transaction_identity_unverified'
+  | 'history_coverage_unavailable';
+
+export type EnableBankingActivationReadiness = Readonly<{
+  allowed: boolean;
+  unmet: readonly EnableBankingActivationRequirement[];
+}>;
+
+export type EnableBankingObservationDisposition =
+  'new' | 'replay' | 'revision' | 'quarantined' | 'ignored';
+
+export type EnableBankingSyncResult = Readonly<{
+  runId: string;
+  strategy: EnableBankingTransactionFetchStrategy;
+  completionStatus: 'completed' | 'evidence_only';
+  activation: EnableBankingActivationReadiness;
+  counts: Readonly<{
+    pages: number;
+    balances: number;
+    transactions: number;
+    new: number;
+    replay: number;
+    revision: number;
+    quarantined: number;
+    canonicalMutations: number;
+  }>;
+  coverage: Readonly<{
+    status: 'complete' | 'partial' | 'unavailable';
+    from: string | null;
+    through: string | null;
+  }>;
+  reconciliationStatus:
+    | 'reconciled'
+    | 'provider_stale'
+    | 'incomplete_history'
+    | 'unresolved_pending'
+    | 'material_mismatch'
+    | 'unavailable';
+  confirmedPrincipalsCreated: 0;
 }>;
 
 export type EnableBankingNormalizationContext = Readonly<{

@@ -16,6 +16,7 @@ await build({
     'cli/migrate': 'src/cli/migrate.ts',
     'cli/create-user': 'src/cli/create-user.ts',
     'cli/enable-banking-fetch': 'src/cli/enable-banking-fetch.ts',
+    'cli/enable-banking-sync': 'src/cli/enable-banking-sync.ts',
     'cli/portfolio-manager-sync': 'src/cli/portfolio-manager-sync.ts',
     'cli/sharesight-sync': 'src/cli/sharesight-sync.ts',
     'dev/import-synthetic': 'src/dev/import-synthetic.ts',

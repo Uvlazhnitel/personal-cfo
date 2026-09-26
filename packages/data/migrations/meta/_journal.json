@@ -78,6 +78,13 @@
       "when": 1790356728003,
       "tag": "0010_enable_banking_client",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1790376610101,
+      "tag": "0011_reflective_makkari",
+      "breakpoints": true
     }
   ]
 }

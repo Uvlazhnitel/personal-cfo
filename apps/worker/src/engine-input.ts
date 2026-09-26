@@ -1,4 +1,10 @@
-import { DataInvariantError, loadCanonicalFacts, loadEvaluationParts } from '@personal-cfo/data';
+import {
+  DataInvariantError,
+  loadCanonicalFacts,
+  loadEvaluationParts,
+  loadLatestEnableBankingReconciliation,
+  loadMergedEnableBankingCoverage,
+} from '@personal-cfo/data';
 import type { Database, RecalculationCause } from '@personal-cfo/data';
 import { parseInstant, parseLocalDate } from '@personal-cfo/domain';
 import type { FinancialEngineInput, FinancialEngineSettings } from '@personal-cfo/financial-engine';
@@ -59,6 +65,39 @@ function effectiveSettingsVersion(
   return selected.version;
 }
 
+function nextUtcDate(value: string): string {
+  const date = new Date(`${value}T00:00:00.000Z`);
+  date.setUTCDate(date.getUTCDate() + 1);
+  return date.toISOString().slice(0, 10);
+}
+
+function applyBankCoverage(
+  context: FinancialEngineInput['current'],
+  coverage: Readonly<{ coveredFrom: string; coveredThrough: string }> | undefined,
+): FinancialEngineInput['current'] {
+  if (coverage === undefined) return context;
+  const bankStart = parseInstant(`${coverage.coveredFrom}T00:00:00.000Z`);
+  const bankEnd = parseInstant(`${nextUtcDate(coverage.coveredThrough)}T00:00:00.000Z`);
+  const startInclusive =
+    context.historyCoverage.startInclusive > bankStart
+      ? context.historyCoverage.startInclusive
+      : bankStart;
+  const endExclusive =
+    context.historyCoverage.endExclusive < bankEnd ? context.historyCoverage.endExclusive : bankEnd;
+  const fullyCovered =
+    bankStart <= context.historyCoverage.startInclusive &&
+    bankEnd >= context.historyCoverage.endExclusive;
+  return Object.freeze({
+    ...context,
+    ...(startInclusive < endExclusive
+      ? { historyCoverage: Object.freeze({ startInclusive, endExclusive }) }
+      : {}),
+    quality: fullyCovered
+      ? context.quality
+      : Object.freeze({ ...context.quality, spendingClassification: 'partial' as const }),
+  });
+}
+
 export async function assembleFinancialEngineInput(
   db: Database,
   request: FinancialEngineAssemblyRequest,
@@ -83,6 +122,12 @@ export async function assembleFinancialEngineInput(
         });
       }
       const canonical = await loadCanonicalFacts(tx, request.ownerId);
+      const bankReconciliation = await loadLatestEnableBankingReconciliation(
+        tx,
+        request.ownerId,
+        asOf,
+      );
+      const bankCoverage = await loadMergedEnableBankingCoverage(tx, request.ownerId, asOf);
       const settingsHistory = parts.settingsHistory as readonly FinancialEngineSettings[];
       const settingsVersion = effectiveSettingsVersion(settingsHistory, effectiveDate);
       const profile = parts.profile;
@@ -93,6 +138,21 @@ export async function assembleFinancialEngineInput(
         typeof sourceWatermark === 'string'
           ? sourceWatermark
           : `owner:${request.ownerId}:v${request.expectedInputVersion.toString()}`;
+      const persistedCurrent = applyBankCoverage(
+        parts.current as FinancialEngineInput['current'],
+        bankCoverage.at(-1),
+      );
+      const current =
+        bankReconciliation === null || bankReconciliation.status === 'reconciled'
+          ? persistedCurrent
+          : Object.freeze({
+              ...persistedCurrent,
+              quality: Object.freeze({
+                ...persistedCurrent.quality,
+                liquidBalance:
+                  bankReconciliation.status === 'unavailable' ? 'unavailable' : 'partial',
+              }),
+            });
       const input = Object.freeze({
         run: Object.freeze({
           asOf,
@@ -103,7 +163,7 @@ export async function assembleFinancialEngineInput(
         }),
         settingsHistory,
         canonical,
-        current: parts.current,
+        current,
         historicalCheckpoints: parts.historicalCheckpoints,
         ccrPeriod: profile['ccrPeriod'],
         rollingCcrPeriods: profile['rollingCcrPeriods'],

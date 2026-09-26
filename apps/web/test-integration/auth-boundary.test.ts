@@ -1,13 +1,37 @@
-import { NextRequest } from 'next/server.js';
-import { describe, expect, it } from 'vitest';
+import { NextRequest, NextResponse } from 'next/server.js';
+import { describe, expect, it, vi } from 'vitest';
 
 import { POST as commandPost } from '../src/app/api/v1/commands/[command]/route.js';
 import { GET as callbackGet } from '../src/app/api/v1/open-banking/enable-banking/callback/route.js';
-import { POST as connectPost } from '../src/app/api/v1/open-banking/enable-banking/connect/route.js';
+import { POST as activatePost } from '../src/app/api/v1/open-banking/enable-banking/activate/route.js';
+import {
+  POST as connectPost,
+  enableBankingAuthorizationResponse,
+} from '../src/app/api/v1/open-banking/enable-banking/connect/route.js';
+import { readCookieValue, startEnableBankingConnection } from '../src/app/debug/connect-bank.js';
 import { POST as disconnectPost } from '../src/app/api/v1/open-banking/enable-banking/disconnect/route.js';
 import { authConfiguration } from '../src/server/auth.js';
+import nextConfig from '../next.config.js';
 
 describe('web authentication boundary', () => {
+  it('suppresses callback query secrets from development request logs', () => {
+    const logging = nextConfig.logging;
+    expect(logging).not.toBe(false);
+    if (logging === false || logging === undefined) throw new Error('Request logging is missing.');
+    const incomingRequests = logging.incomingRequests;
+    expect(incomingRequests).not.toBe(false);
+    const ignored: RegExp[] =
+      typeof incomingRequests === 'object' ? (incomingRequests.ignore ?? []) : [];
+    expect(
+      ignored.some((pattern) =>
+        pattern.test(
+          '/api/v1/open-banking/enable-banking/callback?state=secret&code=one-time-code',
+        ),
+      ),
+    ).toBe(true);
+    expect(ignored.some((pattern) => pattern.test('/api/v1/health'))).toBe(false);
+  });
+
   it('defaults session cookies to secure', () => {
     expect(
       authConfiguration({ APP_ORIGIN: 'https://cfo.example', NODE_ENV: 'production' }),
@@ -59,11 +83,64 @@ describe('web authentication boundary', () => {
       { method: 'POST' },
     );
     expect((await disconnectPost(disconnect)).status).toBe(403);
+    const activate = new NextRequest(
+      'http://127.0.0.1:8080/api/v1/open-banking/enable-banking/activate',
+      { method: 'POST' },
+    );
+    expect((await activatePost(activate)).status).toBe(403);
     const callback = new NextRequest(
       'http://attacker.example/api/v1/open-banking/enable-banking/callback?state=one&state=two&code=code',
     );
     const response = await callbackGet(callback);
     expect(response.status).toBe(303);
     expect(response.headers.get('location')).toBe('https://localhost/debug?open_banking=failed');
+  });
+
+  it('starts Connect Bank with the session CSRF token and navigates without exposing the URL', async () => {
+    expect(readCookieValue('first=one; personal_cfo_csrf=token%2Bvalue', 'personal_cfo_csrf')).toBe(
+      'token+value',
+    );
+    expect(readCookieValue('first=one', 'personal_cfo_csrf')).toBeNull();
+    const fetchImplementation = vi.fn(() =>
+      Promise.resolve(
+        NextResponse.json({
+          authorizationUrl: 'https://auth.enablebanking.com/authorization/synthetic',
+        }),
+      ),
+    );
+    const navigate = vi.fn();
+    await startEnableBankingConnection(
+      'personal_cfo_csrf=token%2Bvalue',
+      fetchImplementation,
+      navigate,
+    );
+    expect(fetchImplementation).toHaveBeenCalledWith(
+      '/api/v1/open-banking/enable-banking/connect',
+      expect.objectContaining({
+        method: 'POST',
+        headers: { Accept: 'application/json', 'x-csrf-token': 'token+value' },
+      }),
+    );
+    expect(navigate).toHaveBeenCalledOnce();
+  });
+
+  it('returns authorization URLs only in an explicit no-store JSON response', async () => {
+    const authorizationUrl = 'https://auth.enablebanking.com/authorization/synthetic';
+    const jsonRequest = new NextRequest(
+      'http://localhost:3000/api/v1/open-banking/enable-banking/connect',
+      { method: 'POST', headers: { accept: 'application/json' } },
+    );
+    const json = enableBankingAuthorizationResponse(jsonRequest, authorizationUrl);
+    expect(json.status).toBe(200);
+    expect(json.headers.get('cache-control')).toBe('no-store');
+    expect(await json.json()).toEqual({ authorizationUrl });
+
+    const redirectRequest = new NextRequest(
+      'http://localhost:3000/api/v1/open-banking/enable-banking/connect',
+      { method: 'POST' },
+    );
+    const redirect = enableBankingAuthorizationResponse(redirectRequest, authorizationUrl);
+    expect(redirect.status).toBe(303);
+    expect(redirect.headers.get('location')).toBe(authorizationUrl);
   });
 });
