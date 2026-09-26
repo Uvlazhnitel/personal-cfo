@@ -1,6 +1,9 @@
 import { configDefaults, defineConfig } from 'vitest/config';
 
 export default defineConfig({
+  oxc: {
+    jsx: { runtime: 'automatic' },
+  },
   test: {
     maxWorkers: 4,
     testTimeout: 15_000,
@@ -10,6 +13,10 @@ export default defineConfig({
       reporter: ['text', 'json-summary'],
     },
     exclude: [...configDefaults.exclude, '**/test-integration/**'],
-    include: ['packages/**/*.test.ts', 'apps/worker/test/**/*.test.ts'],
+    include: [
+      'packages/**/*.test.ts',
+      'apps/worker/test/**/*.test.ts',
+      'apps/web/test/**/*.test.{ts,tsx}',
+    ],
   },
 });

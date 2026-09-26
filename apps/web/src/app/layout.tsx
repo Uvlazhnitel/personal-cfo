@@ -1,8 +1,16 @@
 import type { Metadata } from 'next';
 import type { ReactNode } from 'react';
 
+import './globals.css';
+
 export const metadata: Metadata = {
-  description: 'Personal CFO runtime shell',
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: 'default',
+    title: 'Personal CFO',
+  },
+  description: 'A private, decision-oriented personal finance dashboard.',
+  manifest: '/manifest.webmanifest',
   title: 'Personal CFO',
 };
 
