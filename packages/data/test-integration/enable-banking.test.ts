@@ -224,7 +224,6 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         (await context.db.select({ value: count() }).from(recalculationRecords))[0]!.value,
       ),
     };
-    const fixtureAccount = ENABLE_BANKING_CONTRACT_FIXTURES.items.account;
     const bodies = () => [
       {
         status: 'AUTHORIZED',
@@ -236,26 +235,22 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         authorized: '2026-09-25T08:00:03Z',
         closed: null,
       },
-      {
-        ...fixtureAccount,
-        uid: providerUid,
-        identification_hash: identificationHash,
-        identification_hashes: [identificationHash],
-        name: 'Synthetic daily account',
-        account_id: { iban: 'LV00SYNTHETIC0010' },
-      },
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances),
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage),
+      { transactions: [], continuation_key: 'synthetic-page-2' },
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.finalPage),
     ];
     const run = async (at: string) => {
       const queue = bodies();
       const transport = vi.fn(() => Promise.resolve(response(queue.shift())));
+      const sleeper = vi.fn(() => Promise.resolve());
       const result = await executeEnableBankingDiagnosticFetch(context.db, configuration, {
         clock: { now: () => new Date(at) },
         fetchImplementation: transport,
+        sleeper,
       });
       expect(transport).toHaveBeenCalledTimes(5);
+      expect(sleeper).toHaveBeenCalledWith(1_000, undefined);
       expect(result.confirmedPrincipalsCreated).toBe(0);
       expect(result.authoritativeBookedPresent).toBe(true);
       expect(result.transactionStatuses).toMatchObject({ booked: 6, pending: 1 });
@@ -325,7 +320,6 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       }),
       isCurrent: true,
     });
-    const fixtureAccount = ENABLE_BANKING_CONTRACT_FIXTURES.items.account;
     const bodies = () => [
       {
         status: 'AUTHORIZED',
@@ -336,14 +330,6 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         created: '2026-09-25T08:00:00Z',
         authorized: '2026-09-25T08:00:03Z',
         closed: null,
-      },
-      {
-        ...fixtureAccount,
-        uid: providerUid,
-        identification_hash: identificationHash,
-        identification_hashes: [identificationHash],
-        name: 'Synthetic daily account',
-        account_id: { iban: 'LV00SYNTHETIC0010' },
       },
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances),
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage),
@@ -410,11 +396,11 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
 
       const revisionBodies = (status: 'BOOK' | 'CNCL', amount: string) => {
         const values = bodies();
-        const page = values[3] as {
+        const page = values[2] as {
           transactions: Record<string, unknown>[];
           continuation_key: string;
         };
-        values[3] = {
+        values[2] = {
           ...page,
           transactions: page.transactions.map((transaction) =>
             transaction['entry_reference'] === 'archive-salary-001'

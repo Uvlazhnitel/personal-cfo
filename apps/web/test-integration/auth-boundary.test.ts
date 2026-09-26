@@ -11,8 +11,27 @@ import {
 import { readCookieValue, startEnableBankingConnection } from '../src/app/debug/connect-bank.js';
 import { POST as disconnectPost } from '../src/app/api/v1/open-banking/enable-banking/disconnect/route.js';
 import { authConfiguration } from '../src/server/auth.js';
+import nextConfig from '../next.config.js';
 
 describe('web authentication boundary', () => {
+  it('suppresses callback query secrets from development request logs', () => {
+    const logging = nextConfig.logging;
+    expect(logging).not.toBe(false);
+    if (logging === false || logging === undefined) throw new Error('Request logging is missing.');
+    const incomingRequests = logging.incomingRequests;
+    expect(incomingRequests).not.toBe(false);
+    const ignored: RegExp[] =
+      typeof incomingRequests === 'object' ? (incomingRequests.ignore ?? []) : [];
+    expect(
+      ignored.some((pattern) =>
+        pattern.test(
+          '/api/v1/open-banking/enable-banking/callback?state=secret&code=one-time-code',
+        ),
+      ),
+    ).toBe(true);
+    expect(ignored.some((pattern) => pattern.test('/api/v1/health'))).toBe(false);
+  });
+
   it('defaults session cookies to secure', () => {
     expect(
       authConfiguration({ APP_ORIGIN: 'https://cfo.example', NODE_ENV: 'production' }),

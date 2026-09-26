@@ -47,6 +47,10 @@ import type {
 } from '@personal-cfo/integrations/open-banking/enable-banking';
 
 import type { EnableBankingConfiguration } from './config.js';
+import {
+  INITIAL_ENABLE_BANKING_CONTINUATION_STATE,
+  assessEnableBankingContinuation,
+} from './continuation.js';
 
 type Counts = {
   pages: number;
@@ -65,6 +69,23 @@ export type EnableBankingFetchOptions = Readonly<{
   fetchImplementation?: EnableBankingFetch;
   signal?: AbortSignal;
 }>;
+
+const defaultSleeper: EnableBankingSleeper = (milliseconds, signal) =>
+  new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(signal.reason instanceof Error ? signal.reason : new Error('Request aborted.'));
+      return;
+    }
+    const timeout = setTimeout(resolve, milliseconds);
+    signal?.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(timeout);
+        reject(signal.reason instanceof Error ? signal.reason : new Error('Request aborted.'));
+      },
+      { once: true },
+    );
+  });
 
 function sha256(value: unknown): string {
   return createHash('sha256').update(JSON.stringify(value), 'utf8').digest('hex');
@@ -139,6 +160,8 @@ export async function executeEnableBankingDiagnosticFetch(
   let lastReceiptId: string | null = null;
   let coverageFrom: string | null = null;
   let coverageThrough: string | null = null;
+  let continuationState = INITIAL_ENABLE_BANKING_CONTINUATION_STATE;
+  const sleeper = options.sleeper ?? defaultSleeper;
 
   const finalize = async (
     receipt: PersistedEnableBankingReceipt,
@@ -302,16 +325,12 @@ export async function executeEnableBankingDiagnosticFetch(
       const page = decodeEnableBankingTransactions(receipt.payload);
       counts.pages += 1;
       counts.transactions += page.transactions.length;
-      if (
-        page.continuationKey !== null &&
-        receipt.requestCursorHash !== null &&
-        hashEnableBankingCursor(page.continuationKey) === receipt.requestCursorHash
-      ) {
-        throw new DataInvariantError(
-          'enable_banking.non_advancing_continuation',
-          'Enable Banking continuation key did not advance.',
-        );
-      }
+      const continuation = assessEnableBankingContinuation(continuationState, {
+        requestCursorHash: receipt.requestCursorHash,
+        responseCursorHash:
+          page.continuationKey === null ? null : hashEnableBankingCursor(page.continuationKey),
+        transactionCount: page.transactions.length,
+      });
       const revisions: EnableBankingRevisionInput[] = [];
       let quarantined = false;
       for (const providerTransaction of page.transactions) {
@@ -360,6 +379,10 @@ export async function executeEnableBankingDiagnosticFetch(
         advanceContinuation: true,
         failureCategory: quarantined ? 'enable_banking_transaction_quarantined' : null,
       });
+      continuationState = continuation.state;
+      if (continuation.waitMilliseconds > 0) {
+        await sleeper(continuation.waitMilliseconds, options.signal);
+      }
       return page.continuationKey !== null;
     }
     throw new DataInvariantError(
@@ -428,8 +451,6 @@ export async function executeEnableBankingDiagnosticFetch(
 
     const session = await client.getSession(lease.sessionId, options.signal);
     await consume(session, 'session', 'GET', null);
-    const details = await client.getAccountDetails(lease.accountUid, options.signal);
-    await consume(details, 'account_details', 'GET', null);
     const balances = await client.getBalances(lease.accountUid, options.signal);
     await consume(balances, 'balances', 'GET', null);
 

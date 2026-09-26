@@ -86,9 +86,7 @@ describe('Enable Banking API client', () => {
             country: 'LV',
             psu_types: ['personal'],
             maximum_consent_validity: 15_552_000,
-            auth_methods: [
-              { hidden_method: false, psu_type: 'personal', approach: 'REDIRECT' },
-            ],
+            auth_methods: [{ hidden_method: false, psu_type: 'personal', approach: 'REDIRECT' }],
           },
         ],
       },
