@@ -16,7 +16,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     return NextResponse.json({ error: 'invalid_credentials' }, { status: 400 });
   const session = await authenticate(databaseContext().db, login, password);
   if (session === null) return NextResponse.json({ error: 'invalid_credentials' }, { status: 401 });
-  const response = NextResponse.redirect(new URL('/debug', request.url), 303);
+  const response = NextResponse.redirect(new URL('/', request.url), 303);
   response.cookies.set(SESSION_COOKIE, session.sessionToken, {
     httpOnly: true,
     secure: config.secureCookies,

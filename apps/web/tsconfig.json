@@ -11,6 +11,8 @@
     "next.config.ts",
     "src/**/*.ts",
     "src/**/*.tsx",
+    "test/**/*.ts",
+    "test/**/*.tsx",
     "test-integration/**/*.ts",
     ".next/types/**/*.ts"
   ]

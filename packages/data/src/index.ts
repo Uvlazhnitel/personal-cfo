@@ -1,6 +1,7 @@
 export * from './auth.js';
 export * from './commands.js';
 export * from './database.js';
+export * from './dashboard.js';
 export * from './debug-overview.js';
 export * from './errors.js';
 export * from './engine-runs.js';
