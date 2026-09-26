@@ -5,10 +5,13 @@ import { count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { executeEnableBankingDiagnosticFetch } from '../../../apps/worker/src/enable-banking/fetch.js';
+import { executeEnableBankingSync } from '../../../apps/worker/src/enable-banking/sync.js';
 import type { EnableBankingConfiguration } from '../../../apps/worker/src/enable-banking/config.js';
 import { ENABLE_BANKING_CONTRACT_FIXTURES } from '../../integrations/src/open-banking/enable-banking/index.js';
 import {
   accounts,
+  accountEntries,
+  activateEnableBankingCanonicalImport,
   activateEnableBankingSession,
   beginEnableBankingAuthorization,
   beginEnableBankingDiagnosticFetch,
@@ -17,6 +20,10 @@ import {
   claimEnableBankingAuthorization,
   completeEnableBankingDisconnect,
   createDatabaseContext,
+  createJobBoss,
+  enableBankingBalanceReconciliations,
+  enableBankingCanonicalImports,
+  enableBankingHistoryCoverage,
   enableBankingRawReceipts,
   enableBankingConnections,
   enableBankingProviderAccounts,
@@ -25,12 +32,17 @@ import {
   hashEnableBankingApplicationId,
   investmentContributions,
   listEnableBankingDiscoveredAccounts,
+  loadMergedEnableBankingCoverage,
+  loadEnableBankingActivationReadiness,
+  loadCanonicalLedgerBalanceAt,
   migrateDatabase,
   ownerInputVersions,
   parseEnableBankingDataKey,
   persistEnableBankingRawReceipt,
   portfolioValuations,
   recalculationRecords,
+  settingsVersions,
+  transitionEnableBankingConnectionStatus,
   failEnableBankingRun,
   finalizeEnableBankingReceipt,
   users,
@@ -296,6 +308,233 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
     expect(await context.db.select().from(investmentContributions)).toEqual([]);
   });
 
+  it('gates canonical activation, imports once, and preserves replay idempotency', async () => {
+    await context.db.insert(ownerInputVersions).values({
+      ownerId,
+      version: 0n,
+      updatedAt: '2026-09-25T09:10:00Z',
+    });
+    await context.db.insert(settingsVersions).values({
+      ownerId,
+      version: 'enable-banking-test-v1',
+      effectiveFrom: '2026-01-01T00:00:00Z',
+      payload: encodeSourceJson({
+        spendingBaseline: {
+          materialityThreshold: { amountMinor: 1_000n, currency: 'EUR' },
+        },
+      }),
+      isCurrent: true,
+    });
+    const fixtureAccount = ENABLE_BANKING_CONTRACT_FIXTURES.items.account;
+    const bodies = () => [
+      {
+        status: 'AUTHORIZED',
+        accounts_data: [{ uid: providerUid, identification_hash: identificationHash }],
+        aspsp: { name: 'Swedbank', country: 'LV' },
+        psu_type: 'personal',
+        access: { valid_until: '2027-03-25T08:00:00Z' },
+        created: '2026-09-25T08:00:00Z',
+        authorized: '2026-09-25T08:00:03Z',
+        closed: null,
+      },
+      {
+        ...fixtureAccount,
+        uid: providerUid,
+        identification_hash: identificationHash,
+        identification_hashes: [identificationHash],
+        name: 'Synthetic daily account',
+        account_id: { iban: 'LV00SYNTHETIC0010' },
+      },
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances),
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage),
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.finalPage),
+    ];
+    const boss = createJobBoss(databaseUrl!, 3);
+    await boss.start();
+    try {
+      const evidenceQueue = bodies();
+      const evidenceOnly = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: false,
+        clock: { now: () => new Date('2026-09-25T09:15:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(evidenceQueue.shift()))),
+      });
+      expect(evidenceOnly).toMatchObject({
+        strategy: 'longest',
+        completionStatus: 'evidence_only',
+        confirmedPrincipalsCreated: 0,
+      });
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toEqual([]);
+      expect(await context.db.select().from(enableBankingHistoryCoverage)).toHaveLength(1);
+
+      const providerAccount = await context.db.query.enableBankingProviderAccounts.findFirst({
+        where: eq(enableBankingProviderAccounts.ownerId, ownerId),
+      });
+      expect(providerAccount?.transactionIdentityVerifiedAt).toBeNull();
+      const proofQueue = bodies();
+      const proof = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:18:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(proofQueue.shift()))),
+      });
+      expect(proof).toMatchObject({
+        strategy: 'default',
+        completionStatus: 'evidence_only',
+      });
+      expect(proof.activation.unmet).toContain('owner_not_activated');
+      const verifiedAccount = await context.db.query.enableBankingProviderAccounts.findFirst({
+        where: eq(enableBankingProviderAccounts.ownerId, ownerId),
+      });
+      expect(verifiedAccount?.transactionIdentityVerifiedAt).not.toBeNull();
+      await activateEnableBankingCanonicalImport(
+        context.db,
+        ownerId,
+        providerAccount!.id,
+        '2026-09-25T09:19:00Z',
+      );
+
+      const importQueue = bodies();
+      const imported = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:20:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(importQueue.shift()))),
+      });
+      expect(imported.strategy).toBe('default');
+      expect(imported.completionStatus).toBe('completed');
+      expect(imported.counts.canonicalMutations).toBeGreaterThan(0);
+      const imports = await context.db.select().from(enableBankingCanonicalImports);
+      expect(imports).toHaveLength(5);
+      expect(await context.db.select().from(accountEntries)).toHaveLength(5);
+      expect(await context.db.select().from(enableBankingBalanceReconciliations)).toHaveLength(1);
+      expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
+      expect(await context.db.select().from(recalculationRecords)).toHaveLength(1);
+
+      const revisionBodies = (status: 'BOOK' | 'CNCL', amount: string) => {
+        const values = bodies();
+        const page = values[3] as {
+          transactions: Record<string, unknown>[];
+          continuation_key: string;
+        };
+        values[3] = {
+          ...page,
+          transactions: page.transactions.map((transaction) =>
+            transaction['entry_reference'] === 'archive-salary-001'
+              ? {
+                  ...transaction,
+                  status,
+                  transaction_amount: { currency: 'EUR', amount },
+                }
+              : transaction,
+          ),
+        };
+        return values;
+      };
+      const balanceBeforeCorrection = await loadCanonicalLedgerBalanceAt(
+        context.db,
+        ownerId,
+        accountId,
+        '2026-09-25T23:59:59Z',
+      );
+      const correctedQueue = revisionBodies('BOOK', '2600.00');
+      const corrected = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:27:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(correctedQueue.shift()))),
+      });
+      expect(corrected.counts.canonicalMutations).toBe(2);
+      expect(
+        await loadCanonicalLedgerBalanceAt(context.db, ownerId, accountId, '2026-09-25T23:59:59Z'),
+      ).toBe(balanceBeforeCorrection + 10_000n);
+
+      const cancelledQueue = revisionBodies('CNCL', '2600.00');
+      const cancelled = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:28:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(cancelledQueue.shift()))),
+      });
+      expect(cancelled.counts.canonicalMutations).toBe(1);
+      expect(
+        await loadCanonicalLedgerBalanceAt(context.db, ownerId, accountId, '2026-09-25T23:59:59Z'),
+      ).toBe(balanceBeforeCorrection - 250_000n);
+
+      const rebookedQueue = revisionBodies('BOOK', '2700.00');
+      const rebooked = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:29:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(rebookedQueue.shift()))),
+      });
+      expect(rebooked.counts.canonicalMutations).toBe(1);
+      expect(
+        await loadCanonicalLedgerBalanceAt(context.db, ownerId, accountId, '2026-09-25T23:59:59Z'),
+      ).toBe(balanceBeforeCorrection + 20_000n);
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toHaveLength(8);
+
+      const replayQueue = revisionBodies('BOOK', '2700.00');
+      const replay = await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: true,
+        clock: { now: () => new Date('2026-09-25T09:29:30Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(replayQueue.shift()))),
+      });
+      expect(replay.counts.canonicalMutations).toBe(0);
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toHaveLength(8);
+      expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(4n);
+      expect(await context.db.select().from(recalculationRecords)).toHaveLength(4);
+      expect(
+        await loadMergedEnableBankingCoverage(context.db, ownerId, '2026-09-25T09:26:00Z'),
+      ).toEqual([{ coveredFrom: '2026-09-01', coveredThrough: '2026-09-25' }]);
+    } finally {
+      await boss.stop({ graceful: true, timeout: 5_000, close: true });
+    }
+  });
+
+  it('requires a new session generation to prove identity and coverage again', async () => {
+    await transitionEnableBankingConnectionStatus(
+      context.db,
+      ownerId,
+      'reauth_required',
+      '2026-09-25T09:29:59Z',
+      'enable_banking_session_expired',
+    );
+    const authorization = await beginEnableBankingAuthorization(context.db, {
+      ownerId,
+      applicationIdHash: hashEnableBankingApplicationId(configuration.applicationId),
+      now: '2026-09-25T09:30:00Z',
+    });
+    const claimed = await claimEnableBankingAuthorization(
+      context.db,
+      authorization.state,
+      '2026-09-25T09:30:01Z',
+    );
+    await activateEnableBankingSession(context.db, claimed, dataKey, {
+      sessionId: '018f0000-0000-7000-8000-000000000a15',
+      validUntil: '2027-03-25T09:30:00Z',
+      accounts: [
+        {
+          uid: providerUid,
+          identificationHash,
+          currency: 'EUR',
+          displayHint: 'LV00 •••• 0010',
+        },
+      ],
+      now: '2026-09-25T09:30:02Z',
+    });
+    const account = await context.db.query.enableBankingProviderAccounts.findFirst({
+      where: eq(enableBankingProviderAccounts.ownerId, ownerId),
+    });
+    expect(account?.ownerActivatedAt).not.toBeNull();
+    expect(account).toMatchObject({
+      identityVerifiedAt: null,
+      transactionIdentityVerifiedAt: null,
+    });
+    expect(await loadEnableBankingActivationReadiness(context.db, ownerId, true)).toEqual({
+      allowed: false,
+      unmet: [
+        'account_identity_unverified',
+        'transaction_identity_unverified',
+        'history_coverage_unavailable',
+      ],
+    });
+  });
+
   it('revokes consent and erases usable session aliases without deleting evidence', async () => {
     const lease = await beginEnableBankingDisconnect(
       context.db,
@@ -303,7 +542,7 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       dataKey,
       '2026-09-25T10:00:00Z',
     );
-    expect(lease.sessionId).toBe(sessionId);
+    expect(lease.sessionId).toBe('018f0000-0000-7000-8000-000000000a15');
     await completeEnableBankingDisconnect(context.db, lease, '2026-09-25T10:00:01Z');
     const connection = await context.db.query.enableBankingConnections.findFirst({
       where: eq(enableBankingConnections.ownerId, ownerId),

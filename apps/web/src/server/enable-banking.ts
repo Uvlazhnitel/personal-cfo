@@ -1,4 +1,5 @@
 import {
+  activateEnableBankingCanonicalImport,
   activateEnableBankingSession,
   beginEnableBankingAuthorization,
   beginEnableBankingDisconnect,
@@ -241,6 +242,20 @@ export async function bindEnableBankingAccount(
     canonicalAccountId,
     now: nowInstant(),
   });
+}
+
+export async function activateEnableBankingAccount(
+  ownerId: string,
+  providerAccountId: string,
+): Promise<void> {
+  const configuration = await enableBankingWebConfiguration();
+  if (ownerId !== configuration.ownerId) throw new Error('Enable Banking owner is not configured.');
+  await activateEnableBankingCanonicalImport(
+    databaseContext().db,
+    ownerId,
+    providerAccountId,
+    nowInstant(),
+  );
 }
 
 export async function disconnectEnableBanking(ownerId: string): Promise<void> {

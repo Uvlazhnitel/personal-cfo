@@ -10,7 +10,7 @@ import type { DatabaseContext } from '../src/index.js';
 const databaseUrl = process.env['DATABASE_URL'];
 const suite = databaseUrl === undefined ? describe.skip : describe;
 
-suite('Stage 5 through Stage 8.1 migrations', () => {
+suite('Stage 5 through Stage 8.2 migrations', () => {
   let context: DatabaseContext;
   let temporaryMigrations: string;
   const sourceMigrations = resolve(process.cwd(), 'packages/data/migrations');
@@ -209,7 +209,13 @@ suite('Stage 5 through Stage 8.1 migrations', () => {
       join(sourceMigrations, `${enableBanking.tag}.sql`),
       join(temporaryMigrations, basename(`${enableBanking.tag}.sql`)),
     );
-    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await writeFile(
+      join(temporaryMigrations, 'meta/_journal.json'),
+      JSON.stringify({
+        ...fullJournal,
+        entries: fullJournal.entries.filter((entry) => entry.idx <= 10),
+      }),
+    );
     await migrateDatabase(context.db, temporaryMigrations);
     await migrateDatabase(context.db, temporaryMigrations);
 
@@ -217,5 +223,24 @@ suite('Stage 5 through Stage 8.1 migrations', () => {
       "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'enable_banking_%'",
     );
     expect(enableBankingTables.rows[0]?.count).toBe('6');
+
+    const enableBankingSync = fullJournal.entries.find((entry) => entry.idx === 11);
+    if (enableBankingSync === undefined) throw new Error('Stage 8.2 migration is missing.');
+    await cp(
+      join(sourceMigrations, `${enableBankingSync.tag}.sql`),
+      join(temporaryMigrations, basename(`${enableBankingSync.tag}.sql`)),
+    );
+    await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
+    await migrateDatabase(context.db, temporaryMigrations);
+    await migrateDatabase(context.db, temporaryMigrations);
+
+    const enableBankingSyncTables = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name like 'enable_banking_%'",
+    );
+    expect(enableBankingSyncTables.rows[0]?.count).toBe('13');
+    const syncRunKind = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from pg_constraint where conname = 'enable_banking_run_kind_ck' and pg_get_constraintdef(oid) like '%sync%'",
+    );
+    expect(syncRunKind.rows[0]?.count).toBe('1');
   });
 });

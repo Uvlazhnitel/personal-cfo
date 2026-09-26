@@ -10,6 +10,7 @@
     "build": "node build.mjs",
     "cli:create-user": "pnpm run build && node dist/cli/create-user.js",
     "cli:enable-banking-fetch": "pnpm run build && node dist/cli/enable-banking-fetch.js",
+    "cli:enable-banking-sync": "pnpm run build && node dist/cli/enable-banking-sync.js",
     "cli:migrate": "pnpm run build && node dist/cli/migrate.js",
     "cli:portfolio-manager-sync": "pnpm run build && node dist/cli/portfolio-manager-sync.js",
     "cli:sharesight-sync": "pnpm run build && node dist/cli/sharesight-sync.js",

@@ -4,7 +4,10 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { enableBankingConfiguration } from '../src/enable-banking/config.js';
+import {
+  enableBankingConfiguration,
+  enableBankingScheduleConfiguration,
+} from '../src/enable-banking/config.js';
 
 const temporaryDirectories: string[] = [];
 
@@ -45,7 +48,32 @@ describe('Enable Banking server-only configuration', () => {
       applicationId: 'application-id',
       privateKeyPem: 'synthetic-test-key',
       baseUrl: 'https://api.enablebanking.com',
+      canonicalImportEnabled: false,
     });
+  });
+
+  it('keeps daily synchronization disabled by default and validates schedule settings', () => {
+    expect(enableBankingScheduleConfiguration({})).toEqual({
+      enabled: false,
+      cron: '15 3 * * *',
+      timeZone: 'Europe/Riga',
+    });
+    expect(
+      enableBankingScheduleConfiguration({
+        ENABLE_BANKING_SYNC_ENABLED: 'true',
+        ENABLE_BANKING_SYNC_CRON: '0 4 * * *',
+        ENABLE_BANKING_SYNC_TIME_ZONE: 'UTC',
+      }),
+    ).toEqual({ enabled: true, cron: '0 4 * * *', timeZone: 'UTC' });
+    expect(() =>
+      enableBankingScheduleConfiguration({ ENABLE_BANKING_SYNC_ENABLED: 'yes' }),
+    ).toThrow('true or false');
+    expect(() => enableBankingScheduleConfiguration({ ENABLE_BANKING_SYNC_CRON: '* * *' })).toThrow(
+      'five cron fields',
+    );
+    expect(() =>
+      enableBankingScheduleConfiguration({ ENABLE_BANKING_SYNC_TIME_ZONE: 'Not/AZone' }),
+    ).toThrow('invalid');
   });
 
   it('rejects permissive key files, partial data keys, and remote HTTP origins', async () => {

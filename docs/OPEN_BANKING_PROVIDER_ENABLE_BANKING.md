@@ -2,7 +2,7 @@
 
 ## Status and boundary
 
-Stage 8.0 selected Enable Banking restricted production for one owner-controlled Swedbank Latvia EUR account. Stage 8.1 implements the server-only binding `enable-banking-swedbank-lv-v1`: RS256 application authentication, state-protected redirect/session exchange, explicit EUR account binding, encrypted receipts, and a manual read-only diagnostic scan. It performs no job scheduling or canonical ledger mutation.
+Stage 8.0 selected Enable Banking restricted production for one owner-controlled Swedbank Latvia EUR account. Stage 8.1 implements the server-only binding `enable-banking-swedbank-lv-v1`: RS256 application authentication, state-protected redirect/session exchange, explicit EUR account binding, encrypted receipts, and a manual read-only diagnostic scan. Stage 8.2 adds durable manual and disabled-by-default daily synchronization. Canonical booked imports remain fail-closed behind deployment, identity, coverage, and explicit owner-activation gates.
 
 The production assumption is deliberately narrow: one non-commercial user links only their own allowlisted account. Public or multi-user operation requires a new access, licensing, and pricing review.
 
@@ -73,7 +73,7 @@ This matrix classifies only facts provable from public official documentation fo
 | Consent identity/expiry | `DIRECT` | Authorization/session IDs and actual `access.valid_until`. |
 | Renewal/reconnection | `DERIVED` | Expiry or `EXPIRED_SESSION` requires user reauthorization. |
 | Rate limit | `UNAVAILABLE` | No numeric Enable Banking client limit is published. Honor `429`/`Retry-After`. |
-| Polling | `DIRECT` | Account endpoints are read APIs; Stage 8.1 is manual. A later scheduled stage may run at most once daily. |
+| Polling | `DIRECT` | Account endpoints are read APIs; Stage 8.2 can dispatch at most one singleton sync per connection generation and scheduled day. |
 | Webhooks | `DIRECT` | Signed notifications may update session state; never financial facts. |
 | Sandbox | `DIRECT` | Swedbank Latvia sandbox is documented. |
 | Restricted production | `DIRECT` | Own linked accounts only. |
@@ -101,11 +101,11 @@ The connection state is `disconnected`, `connecting`, `active`, `reauth_required
 
 ## History and synchronization policy
 
-Initial authorization and reconnect use `strategy=longest` immediately after authorization. A closed coverage interval is recorded only after every continuation page completes. The returned earliest booked date—not a requested date—sets the cutover.
+Initial authorization and reconnect use `strategy=longest` immediately after authorization. Recurring sync starts a new overlapping scan with `strategy=default`; it never reuses a provider continuation from a previous run. A closed coverage interval is recorded only after every continuation page completes. The returned earliest booked date—not a requested date—sets the cutover.
 
 Swedbank/PSD2 material supports a 90-day normal-history baseline; Enable Banking notes that longer history can be available briefly after authorization but varies by ASPSP and account. Personal CFO therefore never claims twelve months merely because `longest` was requested. Current Pay Cycle, rolling 3/6/12-month metrics, Cash Drag, and CCR are authoritative only when their complete required interval is proven. No CSV bootstrap is part of Stage 8.
 
-Later scheduled polling may run once daily for the single selected account and use a recent overlapping window with `strategy=default`. Stage 8.1 deliberately performs only explicit manual `longest` scans. Stored canonical history survives consent renewal, while a new session must re-establish account identity by `identification_hash`.
+The worker may dispatch one singleton job per connection generation and Europe/Riga day. Scheduling defaults off and, when enabled, defaults to `15 3 * * *`. Stored canonical history survives consent renewal, while a new session must re-establish account identity by `identification_hash` and restart with `longest`.
 
 ## Pending, booked, and correction policy
 
@@ -149,6 +149,14 @@ The callback accepts only one valid state and exactly one code or cancellation. 
 
 `pnpm enable-banking:fetch` validates the active session and account, requests `strategy=longest`, and drains every continuation page, including empty pages. Each body is encrypted and committed before decoding. Continuations are encrypted current-session/run checkpoints; source/fingerprint equality is replay and changed fingerprint is revision. Records without `entry_reference` are quarantined, absence never deletes evidence, and `confirmedPrincipalsCreated` is always zero. The command logs only counts, enum/status summaries, and safe categories.
 
-Stage 8.1 is deterministically `READY_FOR_STAGE_8_2`; optional sandbox/live validation is separately `BLOCKED_ON_LIVE_ENABLE_BANKING_ACCESS`. Stage 8.2 retains scheduled ingestion, canonical booked imports, transfer confirmation, reconciliation activation, consent renewal UX, and full purge.
+## Stage 8.2 durable synchronization and canonical gate
 
-Stage 8.1 adds no payment initiation, another bank/provider, generic banking framework, non-EUR activation, AI categorization, Stage 9 UI, trading, or automatic investment.
+`pnpm enable-banking:sync` and the scheduled worker share `executeEnableBankingSync()`. They reuse the Stage 8.1 lease, receipt encryption, source revisions, and session-scoped continuation. Every normalized balance/transaction observation is immutable and receipt-linked. Replay changes no financial state; a new fingerprint is a provider revision; absence is never deletion.
+
+Canonical import requires all five facts: the deployment flag, stable account identity across the current binding, booked `entry_reference` replay across completed scans, a closed coverage interval, and authenticated owner activation. Until then, the result is `evidence_only` with explicit unmet reasons. Eligible booked movements enter one financial-command transaction as signed neutral bank entries with an unresolved ambiguity; no income, consumption, transfer, or contribution is invented. A provider correction adds compensation and an optional replacement. Pending/hold records never create entries, and changed-ID pending/booked pairs remain review candidates.
+
+The latest booked `ITBD` (then `CLBD` on a tied timestamp) is reconciled at the same cutoff against canonical booked entries. Stale provider data, incomplete history, unresolved pending evidence, unavailable balance, or material mismatch downgrades liquid-balance completeness and suppresses authority-dependent recommendations. No adjustment is synthesized. Brokerage transfer evidence reaches `ConfirmedContributionPrincipal` only through the pre-existing exact canonical-transfer constructor.
+
+Stage 8.2 is deterministically `READY_FOR_LIVE_BANK_VALIDATION`. Live sandbox/production proof remains required before enabling canonical import. Account-scoped purge and full consent-renewal UX remain later Stage 8 work.
+
+Stage 8.2 adds no payment initiation, another bank/provider, generic banking framework, non-EUR activation, AI categorization, Stage 9 UI, trading, or automatic investment.

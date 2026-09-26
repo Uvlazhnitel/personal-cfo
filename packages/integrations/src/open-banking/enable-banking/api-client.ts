@@ -26,6 +26,7 @@ import type {
   EnableBankingSessionDto,
   EnableBankingSleeper,
   EnableBankingStartAuthorizationDto,
+  EnableBankingTransactionFetchStrategy,
   EnableBankingTransactionsDto,
 } from './types.js';
 
@@ -391,10 +392,12 @@ export class EnableBankingApiClient {
     input: Readonly<{
       accountUid: string;
       continuationKey: string | null;
+      strategy?: EnableBankingTransactionFetchStrategy;
       signal?: AbortSignal;
     }>,
   ): Promise<EnableBankingApiResponse<EnableBankingTransactionsDto>> {
-    const query = new URLSearchParams({ strategy: 'longest' });
+    const strategy = input.strategy ?? 'longest';
+    const query = new URLSearchParams({ strategy });
     if (input.continuationKey !== null) query.set('continuation_key', input.continuationKey);
     return this.#request({
       endpoint: 'transactions',

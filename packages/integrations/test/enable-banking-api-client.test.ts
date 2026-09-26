@@ -128,6 +128,22 @@ describe('Enable Banking API client', () => {
     expect(calls[4]?.url).toContain('strategy=longest&continuation_key=opaque-page-1');
   });
 
+  it('uses the explicit recurring default strategy without carrying a prior cursor', async () => {
+    const urls: string[] = [];
+    const fetchImplementation = vi.fn((url: string | URL | Request) => {
+      urls.push(url instanceof Request ? url.url : url.toString());
+      return Promise.resolve(response({ transactions: [], continuation_key: null }));
+    }) as typeof fetch;
+    await client(fetchImplementation).getTransactions({
+      accountUid,
+      continuationKey: null,
+      strategy: 'default',
+    });
+    expect(urls).toHaveLength(1);
+    expect(urls[0]).toContain('strategy=default');
+    expect(urls[0]).not.toContain('continuation_key');
+  });
+
   it('does not retry authorization, session exchange, or disconnect requests', async () => {
     const fetchImplementation = vi.fn(() => Promise.resolve(response({}, 500))) as typeof fetch;
     const api = client(fetchImplementation);

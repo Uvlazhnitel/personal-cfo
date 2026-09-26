@@ -9,6 +9,9 @@ export const JOB_QUEUES = Object.freeze({
   recalculateDead: 'financial.recalculate.dead',
   sinkingAllocate: 'sinking.allocate',
   sinkingAllocateDead: 'sinking.allocate.dead',
+  enableBankingDispatch: 'open-banking.enable-banking.dispatch',
+  enableBankingSync: 'open-banking.enable-banking.sync',
+  enableBankingSyncDead: 'open-banking.enable-banking.sync.dead',
 });
 
 export const RECALCULATION_CAUSES = [
@@ -22,6 +25,9 @@ export const RECALCULATION_CAUSES = [
   'cash_activity',
   'sinking_fund_creation',
   'cash_correction',
+  'bank_sync',
+  'bank_correction',
+  'bank_transfer_confirmation',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];
@@ -42,6 +48,12 @@ export type SinkingAllocationJob = Readonly<{
   inputVersion: string;
   asOf: string;
   effectiveDate: string;
+}>;
+
+export type EnableBankingSyncJob = Readonly<{
+  ownerId: string;
+  connectionGeneration: string;
+  scheduledDate: string;
 }>;
 
 type DatabaseTransaction = Parameters<Parameters<Database['transaction']>[0]>[0];
@@ -91,14 +103,29 @@ export async function enqueueSinkingAllocation(
   return id;
 }
 
+export async function enqueueEnableBankingSync(
+  boss: PgBossType,
+  payload: EnableBankingSyncJob,
+): Promise<string | null> {
+  return boss.send(JOB_QUEUES.enableBankingSync, payload, {
+    singletonKey: `${payload.connectionGeneration}:${payload.scheduledDate}`,
+    retryLimit: 3,
+    retryDelay: 30,
+    retryBackoff: true,
+    retryDelayMax: 900,
+    deadLetter: JOB_QUEUES.enableBankingSyncDead,
+  });
+}
+
 export type RecalculationJobHandler = (job: Job<RecalculationJob>) => Promise<void>;
 export type SinkingAllocationJobHandler = (job: Job<SinkingAllocationJob>) => Promise<void>;
+export type EnableBankingSyncJobHandler = (job: Job<EnableBankingSyncJob>) => Promise<void>;
 
 export async function jobInfrastructureReady(db: Database): Promise<boolean> {
   const result = await db.execute(
     sql<{
       count: string;
-    }>`select count(*)::text as count from pgboss.queue where name in (${JOB_QUEUES.recalculate}, ${JOB_QUEUES.sinkingAllocate}, ${JOB_QUEUES.recalculateDead}, ${JOB_QUEUES.sinkingAllocateDead})`,
+    }>`select count(*)::text as count from pgboss.queue where name in (${JOB_QUEUES.recalculate}, ${JOB_QUEUES.sinkingAllocate}, ${JOB_QUEUES.recalculateDead}, ${JOB_QUEUES.sinkingAllocateDead}, ${JOB_QUEUES.enableBankingDispatch}, ${JOB_QUEUES.enableBankingSync}, ${JOB_QUEUES.enableBankingSyncDead})`,
   );
-  return result.rows[0]?.['count'] === '4';
+  return result.rows[0]?.['count'] === '7';
 }

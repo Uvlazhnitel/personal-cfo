@@ -13,6 +13,7 @@ import {
   ENABLE_BANKING_CONTRACT_FIXTURES,
   ENABLE_BANKING_FIELD_CLASSIFICATION,
   assertEnableBankingSessionBinding,
+  confirmEnableBankingPortfolioContribution,
   decodeEnableBankingAuthorizedSession,
   decodeEnableBankingBalances,
   decodeEnableBankingTransactions,
@@ -28,6 +29,7 @@ import {
   type EnableBankingExactDecimal,
 } from '../src/open-banking/enable-banking/index.js';
 import type { ConfirmedContributionPrincipal } from '../src/portfolio/types.js';
+import type { ContributionEvidence } from '../src/portfolio/types.js';
 
 const context = {
   connection: {
@@ -124,6 +126,54 @@ describe('Enable Banking Swedbank Latvia contract binding', () => {
     expect(() => decodeEnableBankingAuthorizedSession(JSON.stringify(malformed))).toThrow(
       'identification hash',
     );
+  });
+
+  it('creates investment principal only through the confirmed canonical-transfer boundary', () => {
+    const bank = normalizeEnableBankingTransaction(
+      decodeOne(ENABLE_BANKING_CONTRACT_FIXTURES.items.brokerage),
+      fixtureAccount(),
+    );
+    if (bank.observation === null) throw new Error('Expected brokerage observation.');
+    const evidence: ContributionEvidence = {
+      connection: {
+        provider: 'portfolio-manager',
+        connectionId: 'portfolio-connection',
+      },
+      providerPortfolioId: 'portfolio-1',
+      providerContributionId: 'capital-flow-1',
+      effectiveAt: parseInstant('2026-09-12T12:00:00Z'),
+      amount: createMoney(20_000n, EUR),
+      direction: 'contribution',
+      providerReference: 'synthetic-brokerage-reference',
+      revision: {
+        sourceId: 'capital-flow-1',
+        version: { kind: 'sha256_fingerprint', value: 'a'.repeat(64) },
+      },
+    };
+    const confirmed = confirmEnableBankingPortfolioContribution({
+      bankObservation: bank.observation,
+      portfolioEvidence: evidence,
+      expectedPortfolioId: 'portfolio-1',
+      canonicalTransferId: 'canonical-transfer-1',
+      confirmedContributionKey: 'contribution-key-1',
+      uniqueCandidateCount: 1,
+    });
+    expect(confirmed.match.state).toBe('confirmed');
+    expect(confirmed.principal).toMatchObject({
+      authority: 'confirmed_principal',
+      canonicalTransferId: 'canonical-transfer-1',
+      amount: { amountMinor: 20_000n, currency: 'EUR' },
+    });
+    const ambiguous = confirmEnableBankingPortfolioContribution({
+      bankObservation: bank.observation,
+      portfolioEvidence: evidence,
+      expectedPortfolioId: 'another-portfolio',
+      canonicalTransferId: 'canonical-transfer-1',
+      confirmedContributionKey: 'contribution-key-1',
+      uniqueCandidateCount: 1,
+    });
+    expect(ambiguous.match.state).toBe('candidate');
+    expect(ambiguous.principal).toBeNull();
   });
 
   it('selects the newest booked balance and keeps available cash non-authoritative', () => {

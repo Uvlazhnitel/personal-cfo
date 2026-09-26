@@ -15,10 +15,13 @@ import {
   accounts,
   enableBankingAuthorizationAttempts,
   enableBankingConnections,
+  enableBankingBalanceObservations,
   enableBankingProviderAccounts,
   enableBankingRawReceipts,
   enableBankingRuns,
   enableBankingSourceRevisions,
+  enableBankingSyncStates,
+  enableBankingTransactionObservations,
   users,
 } from './schema.js';
 import { generateUuidV7 } from './uuid-v7.js';
@@ -74,6 +77,35 @@ export type EnableBankingRevisionInput = Readonly<{
   providerAccountId: string;
 }>;
 
+export type EnableBankingTransactionObservationInput = Readonly<{
+  id: string;
+  providerAccountId: string;
+  sourceKey: string | null;
+  revisionSha256: string;
+  providerStatus: string;
+  direction: 'credit' | 'debit';
+  amountMinor: bigint;
+  currency: string;
+  bookingDate: string | null;
+  valueDate: string | null;
+  transactionDate: string | null;
+  bankCodeHash: string | null;
+  counterpartyHash: string | null;
+  referenceHash: string | null;
+  canonicalization: string;
+  ambiguityKind: 'unclassified_external_flow' | 'unresolved_transfer';
+}>;
+
+export type EnableBankingBalanceObservationInput = Readonly<{
+  id: string;
+  providerAccountId: string;
+  revisionSha256: string;
+  balanceKind: string;
+  amountMinor: bigint;
+  currency: string;
+  sourceAsOf: string;
+}>;
+
 export type EnableBankingRevisionDisposition = Readonly<{
   sourceKey: string;
   revisionSha256: string;
@@ -107,6 +139,9 @@ export type EnableBankingDiagnosticLease = EnableBankingRunContext &
     identificationHash: string;
     continuationKey: string | null;
   }>;
+
+export type EnableBankingSyncLease = EnableBankingDiagnosticLease &
+  Readonly<{ strategy: 'longest' | 'default' }>;
 
 export type EnableBankingDisconnectLease = EnableBankingRunContext &
   Readonly<{ leaseId: string; sessionId: string }>;
@@ -514,6 +549,8 @@ export async function activateEnableBankingSession(
             displayHintAuthTag: encryptedHint?.authTag ?? null,
             sessionGeneration,
             currency: account.currency,
+            identityVerifiedAt: null,
+            transactionIdentityVerifiedAt: null,
             observedAt: input.now,
             updatedAt: input.now,
           },
@@ -526,6 +563,8 @@ export async function activateEnableBankingSession(
         accountUidIv: null,
         accountUidAuthTag: null,
         sessionGeneration: null,
+        identityVerifiedAt: null,
+        transactionIdentityVerifiedAt: null,
         updatedAt: input.now,
       })
       .where(
@@ -797,6 +836,8 @@ export async function finalizeEnableBankingReceipt(
     receiptId: string;
     status: 'normalized' | 'quarantined';
     revisions: readonly EnableBankingRevisionInput[];
+    transactionObservations?: readonly EnableBankingTransactionObservationInput[];
+    balanceObservations?: readonly EnableBankingBalanceObservationInput[];
     responseCursor: string | null;
     advanceContinuation: boolean;
     failureCategory?: string | null;
@@ -899,6 +940,71 @@ export async function finalizeEnableBankingReceipt(
         disposition: current === undefined ? 'new' : 'revision',
       });
     }
+    for (const observation of input.transactionObservations ?? []) {
+      const account = await tx.query.enableBankingProviderAccounts.findFirst({
+        where: and(
+          eq(enableBankingProviderAccounts.id, observation.providerAccountId),
+          eq(enableBankingProviderAccounts.ownerId, run.ownerId),
+          eq(enableBankingProviderAccounts.connectionId, run.connectionId),
+        ),
+      });
+      if (account === undefined) {
+        throw new DataInvariantError(
+          'enable_banking.cross_account_observation',
+          'Transaction observation does not belong to the current owner and connection.',
+        );
+      }
+      if (observation.sourceKey !== null) {
+        await tx
+          .update(enableBankingTransactionObservations)
+          .set({ isCurrent: false })
+          .where(
+            and(
+              eq(enableBankingTransactionObservations.ownerId, run.ownerId),
+              eq(enableBankingTransactionObservations.connectionId, run.connectionId),
+              eq(enableBankingTransactionObservations.sourceKey, observation.sourceKey),
+              ne(enableBankingTransactionObservations.revisionSha256, observation.revisionSha256),
+              eq(enableBankingTransactionObservations.isCurrent, true),
+            ),
+          );
+      }
+      await tx
+        .insert(enableBankingTransactionObservations)
+        .values({
+          ...observation,
+          ownerId: run.ownerId,
+          connectionId: run.connectionId,
+          receiptId: input.receiptId,
+          observedAt: input.now,
+          isCurrent: true,
+        })
+        .onConflictDoNothing();
+    }
+    for (const observation of input.balanceObservations ?? []) {
+      const account = await tx.query.enableBankingProviderAccounts.findFirst({
+        where: and(
+          eq(enableBankingProviderAccounts.id, observation.providerAccountId),
+          eq(enableBankingProviderAccounts.ownerId, run.ownerId),
+          eq(enableBankingProviderAccounts.connectionId, run.connectionId),
+        ),
+      });
+      if (account === undefined) {
+        throw new DataInvariantError(
+          'enable_banking.cross_account_observation',
+          'Balance observation does not belong to the current owner and connection.',
+        );
+      }
+      await tx
+        .insert(enableBankingBalanceObservations)
+        .values({
+          ...observation,
+          ownerId: run.ownerId,
+          connectionId: run.connectionId,
+          receiptId: input.receiptId,
+          observedAt: input.now,
+        })
+        .onConflictDoNothing();
+    }
     let continuationCiphertext: string | null = null;
     let continuationIv: string | null = null;
     let continuationAuthTag: string | null = null;
@@ -942,12 +1048,13 @@ export async function finalizeEnableBankingReceipt(
   });
 }
 
-export async function beginEnableBankingDiagnosticFetch(
+async function beginEnableBankingFetch(
   db: Database,
   ownerId: string,
   key: EnableBankingDataKey,
   now: string,
-): Promise<EnableBankingDiagnosticLease> {
+  kind: 'diagnostic_fetch' | 'sync',
+): Promise<EnableBankingSyncLease> {
   return db.transaction(async (tx) => {
     const connection = await tx.query.enableBankingConnections.findFirst({
       where: eq(enableBankingConnections.ownerId, ownerId),
@@ -1012,13 +1119,23 @@ export async function beginEnableBankingDiagnosticFetch(
         'Bound EUR account is unavailable in the active session.',
       );
     }
+    const syncState = await tx.query.enableBankingSyncStates.findFirst({
+      where: eq(enableBankingSyncStates.providerAccountId, providerAccount.id),
+    });
+    const strategy =
+      kind === 'diagnostic_fetch' ||
+      syncState === undefined ||
+      syncState.sessionGeneration !== connection.sessionGeneration ||
+      !syncState.initialScanComplete
+        ? ('longest' as const)
+        : ('default' as const);
     let run =
       connection.activeRunId === null
         ? undefined
         : await tx.query.enableBankingRuns.findFirst({
             where: and(
               eq(enableBankingRuns.id, connection.activeRunId),
-              eq(enableBankingRuns.kind, 'diagnostic_fetch'),
+              eq(enableBankingRuns.kind, kind),
               eq(enableBankingRuns.status, 'running'),
               eq(enableBankingRuns.sessionGeneration, connection.sessionGeneration),
             ),
@@ -1029,9 +1146,9 @@ export async function beginEnableBankingDiagnosticFetch(
         id: runId,
         ownerId,
         connectionId: connection.id,
-        kind: 'diagnostic_fetch',
+        kind,
         status: 'running',
-        strategy: 'longest',
+        strategy,
         sessionGeneration: connection.sessionGeneration,
         providerAccountId: providerAccount.id,
         startedAt: now,
@@ -1115,8 +1232,27 @@ export async function beginEnableBankingDiagnosticFetch(
       accountUid,
       identificationHash,
       continuationKey,
+      strategy,
     });
   });
+}
+
+export async function beginEnableBankingDiagnosticFetch(
+  db: Database,
+  ownerId: string,
+  key: EnableBankingDataKey,
+  now: string,
+): Promise<EnableBankingDiagnosticLease> {
+  return beginEnableBankingFetch(db, ownerId, key, now, 'diagnostic_fetch');
+}
+
+export async function beginEnableBankingSync(
+  db: Database,
+  ownerId: string,
+  key: EnableBankingDataKey,
+  now: string,
+): Promise<EnableBankingSyncLease> {
+  return beginEnableBankingFetch(db, ownerId, key, now, 'sync');
 }
 
 export async function renewEnableBankingLease(
@@ -1194,15 +1330,7 @@ export async function failEnableBankingRun(
   indeterminate = false,
 ): Promise<void> {
   await db.transaction(async (tx) => {
-    await tx
-      .update(enableBankingRuns)
-      .set({
-        status: indeterminate ? 'indeterminate' : 'failed',
-        completedAt: now,
-        failureCategory: category,
-      })
-      .where(eq(enableBankingRuns.id, lease.runId));
-    await tx
+    const released = await tx
       .update(enableBankingConnections)
       .set({
         ...(indeterminate ? { status: 'error' } : {}),
@@ -1215,9 +1343,20 @@ export async function failEnableBankingRun(
       .where(
         and(
           eq(enableBankingConnections.id, lease.connectionId),
+          eq(enableBankingConnections.activeRunId, lease.runId),
           eq(enableBankingConnections.leaseId, lease.leaseId),
         ),
-      );
+      )
+      .returning({ id: enableBankingConnections.id });
+    if (released.length === 0) return;
+    await tx
+      .update(enableBankingRuns)
+      .set({
+        status: indeterminate ? 'indeterminate' : 'failed',
+        completedAt: now,
+        failureCategory: category,
+      })
+      .where(and(eq(enableBankingRuns.id, lease.runId), eq(enableBankingRuns.status, 'running')));
   });
 }
 

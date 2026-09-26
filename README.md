@@ -1,6 +1,6 @@
 # Personal CFO
 
-Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, manually invoked read-only portfolio evidence adapters, and a secure evidence-only Enable Banking connection for one Swedbank Latvia EUR account. Portfolio Manager is the selected self-hosted production portfolio provider; Sharesight remains an independent reference/validation provider. Canonical bank and portfolio activation, voice, AI, proactive notifications, and the product PWA are not implemented.
+Personal CFO is a deterministic, self-hosted financial decision system. It provides a PostgreSQL-backed calculation pipeline, local authentication, an internal persisted-state debug view, durable Telegram text input for one allowlisted owner, manually invoked read-only portfolio evidence adapters, and durable Enable Banking synchronization for one Swedbank Latvia EUR account. Portfolio Manager is the selected self-hosted production portfolio provider; Sharesight remains an independent reference/validation provider. Bank canonical import stays off until its deployment flag, stable identity, closed coverage, and explicit owner activation gates all pass. Voice, AI, proactive notifications, and the product PWA are not implemented.
 
 ## Requirements
 
@@ -37,7 +37,7 @@ pnpm dev:web
 pnpm dev:worker
 ```
 
-The web app is available at [http://localhost:3000](http://localhost:3000). `/api/health/live` is dependency-free; `/api/health/ready` returns `503` until PostgreSQL migrations and all four queues are present. `/debug` requires the bootstrapped local account and renders persisted data only.
+The web app is available at [http://localhost:3000](http://localhost:3000). `/api/health/live` is dependency-free; `/api/health/ready` returns `503` until PostgreSQL migrations and all seven queues are present. `/debug` requires the bootstrapped local account and renders persisted data only.
 
 Telegram remains disabled when `TELEGRAM_BOT_TOKEN`, `TELEGRAM_ALLOWED_USER_ID`, and `TELEGRAM_OWNER_ID` are all absent. Set all three to enable it; partial configuration fails worker startup. See [`docs/TELEGRAM.md`](docs/TELEGRAM.md) for supported commands, durability, correction, and privacy behavior.
 
@@ -45,7 +45,7 @@ Sharesight configuration is read only by `pnpm sharesight:sync`, so normal worke
 
 Portfolio Manager configuration is read only by `pnpm portfolio-manager:sync`; normal worker startup remains unaffected. The manual command requires the v1 integration contract, stores every response as an encrypted receipt before decoding, resumes the provider cursor atomically, and produces evidence only. It never writes canonical valuations, confirmed principal, input versions, recalculations, recommendations, or financial jobs. See [`docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md`](docs/PORTFOLIO_PROVIDER_PORTFOLIO_MANAGER.md).
 
-Enable Banking configuration is loaded only by the connection API routes and `pnpm enable-banking:fetch`. The application RSA key must be an external absolute-path mode-0600 file; the 32-byte data key encrypts session aliases, page continuations, display hints, and 30-day raw receipts. The authenticated connect route starts bank-controlled SCA, the public callback consumes a single-use 15-minute state, and account binding is an explicit authenticated CSRF-protected action. The manual fetch always requests `strategy=longest`, drains all continuation pages, and persists evidence only—never canonical entries, flows, contributions, versions, recalculations, recommendations, or jobs. See [`docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md`](docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md).
+Enable Banking configuration is loaded by the connection routes and the manual `enable-banking:fetch`/`enable-banking:sync` commands. The application RSA key must be an external absolute-path mode-0600 file; the 32-byte data key encrypts session aliases, page continuations, display hints, and 30-day raw receipts. Diagnostic fetch remains evidence-only. Production sync uses `longest` for a new session, then overlapping `default` scans, and drains every continuation page. Daily dispatch is disabled by default. Canonical import additionally requires `ENABLE_BANKING_CANONICAL_IMPORT_ENABLED=true`, replay-proven transaction identity, closed coverage, verified account identity, and explicit authenticated activation; otherwise sync is evidence-only. See [`docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md`](docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md).
 
 ## Docker Compose
 

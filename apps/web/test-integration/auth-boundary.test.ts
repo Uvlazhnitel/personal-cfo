@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { POST as commandPost } from '../src/app/api/v1/commands/[command]/route.js';
 import { GET as callbackGet } from '../src/app/api/v1/open-banking/enable-banking/callback/route.js';
+import { POST as activatePost } from '../src/app/api/v1/open-banking/enable-banking/activate/route.js';
 import { POST as connectPost } from '../src/app/api/v1/open-banking/enable-banking/connect/route.js';
 import { POST as disconnectPost } from '../src/app/api/v1/open-banking/enable-banking/disconnect/route.js';
 import { authConfiguration } from '../src/server/auth.js';
@@ -59,6 +60,11 @@ describe('web authentication boundary', () => {
       { method: 'POST' },
     );
     expect((await disconnectPost(disconnect)).status).toBe(403);
+    const activate = new NextRequest(
+      'http://127.0.0.1:8080/api/v1/open-banking/enable-banking/activate',
+      { method: 'POST' },
+    );
+    expect((await activatePost(activate)).status).toBe(403);
     const callback = new NextRequest(
       'http://attacker.example/api/v1/open-banking/enable-banking/callback?state=one&state=two&code=code',
     );

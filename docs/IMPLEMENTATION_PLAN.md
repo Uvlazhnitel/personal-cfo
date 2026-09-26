@@ -144,13 +144,13 @@ Required reconciliation regressions are:
 
 ## Stage 8 — Open Banking Integration
 
-**Implementation status:** `READY_FOR_STAGE_8_2`. Stage 8.0 selected Enable Banking restricted production for one personal Swedbank Latvia EUR account. Stage 8.1 implements the dependency-free RS256 read client, state-protected consent callback, encrypted session/account metadata, explicit EUR account binding, durable encrypted receipts, manual `longest` scan, evidence revision tracking, and explicit disconnect. It intentionally writes no canonical bank facts and adds no scheduler or webhook.
+**Implementation status:** `READY_FOR_LIVE_BANK_VALIDATION`. Stage 8.0 selected Enable Banking restricted production for one personal Swedbank Latvia EUR account. Stage 8.1 implemented the secure client/consent and evidence boundary. Stage 8.2 adds recoverable `longest`/`default` synchronization, a disabled-by-default daily dispatcher, immutable observations and revisions, closed coverage, explicit owner activation, gated neutral booked imports, append-only corrections, candidate isolation, and booked-balance reconciliation. Provider evidence still cannot create confirmed investment principal directly.
 
 **Goal:** Reliably synchronize Swedbank accounts, balances, and transactions through the selected provider.
 
 **Dependencies:** Stage 5; ADR-036 and ADR-037; an operator-owned Enable Banking restricted-production or sandbox application; live proof that Swedbank supplies stable `entry_reference` for canonicalizable records.
 
-**Next boundary:** Stage 8.2 may add scheduled overlapping evidence ingestion, booked canonical import commands, pending-to-booked candidates, transfer matching, reconciliation activation, renewal workflow, and account-scoped purge. It must preserve the Stage 8.1 encrypted receipt/state boundaries and must not invent PKCE, refresh tokens, or a cross-session provider cursor absent from the selected contract.
+**Next boundary:** Live Swedbank validation must prove stable `entry_reference`, actual history coverage, balance semantics, and safe replay before production activation. Account-scoped purge remains unimplemented and must satisfy ADR-037 before general availability. Consent renewal remains user-driven. No PKCE, refresh token, cross-session provider cursor, payment initiation, or non-EUR authority may be invented.
 
 **Deliverables:** Bank adapter, callback, sync jobs/state, review queue, account reconciliation, and recovery runbook.
 

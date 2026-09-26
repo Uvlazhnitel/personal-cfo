@@ -6,6 +6,7 @@ import {
 } from '@personal-cfo/data';
 import type { RecalculationJob, SinkingAllocationJob } from '@personal-cfo/data';
 import { processAutomaticSinkingAllocationJob, processRecalculationJob } from './job-handlers.js';
+import { startEnableBankingRuntime } from './enable-banking/runtime.js';
 import { telegramConfiguration } from './telegram/config.js';
 import { startTelegramRuntime } from './telegram/runtime.js';
 
@@ -38,6 +39,7 @@ log('worker.started');
 const telegram = await startTelegramRuntime(database.db, boss, log, {
   configuration: telegramConfig,
 });
+await startEnableBankingRuntime(database.db, boss, log);
 
 async function shutDown(signal: NodeJS.Signals): Promise<void> {
   if (shuttingDown) return;

@@ -1274,7 +1274,7 @@ export const enableBankingRuns = pgTable(
     index('enable_banking_runs_owner_started_idx').on(table.ownerId, table.startedAt),
     check(
       'enable_banking_run_kind_ck',
-      sql`${table.kind} in ('authorization','diagnostic_fetch','disconnect')`,
+      sql`${table.kind} in ('authorization','diagnostic_fetch','sync','disconnect')`,
     ),
     check(
       'enable_banking_run_status_ck',
@@ -1341,6 +1341,9 @@ export const enableBankingProviderAccounts = pgTable(
     sessionGeneration: uuid('session_generation'),
     currency: text('currency').notNull(),
     canonicalAccountId: uuid('canonical_account_id').references(() => accounts.id),
+    identityVerifiedAt: instant('identity_verified_at'),
+    transactionIdentityVerifiedAt: instant('transaction_identity_verified_at'),
+    ownerActivatedAt: instant('owner_activated_at'),
     observedAt: instant('observed_at').notNull(),
     updatedAt: instant('updated_at').notNull(),
   },
@@ -1454,6 +1457,298 @@ export const enableBankingSourceRevisions = pgTable(
     check(
       'enable_banking_source_kind_ck',
       sql`${table.recordKind} in ('account','balance','transaction')`,
+    ),
+  ],
+);
+
+export const enableBankingSyncStates = pgTable(
+  'enable_banking_sync_states',
+  {
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .primaryKey()
+      .references(() => enableBankingProviderAccounts.id),
+    sessionGeneration: uuid('session_generation').notNull(),
+    initialScanComplete: boolean('initial_scan_complete').notNull().default(false),
+    lastStrategy: text('last_strategy'),
+    lastCompletedAt: instant('last_completed_at'),
+    nextScheduledAt: instant('next_scheduled_at'),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_sync_state_owner_connection_uq').on(
+      table.ownerId,
+      table.connectionId,
+    ),
+    check(
+      'enable_banking_sync_state_strategy_ck',
+      sql`${table.lastStrategy} is null or ${table.lastStrategy} in ('longest','default')`,
+    ),
+  ],
+);
+
+export const enableBankingTransactionObservations = pgTable(
+  'enable_banking_transaction_observations',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    sourceKey: text('source_key'),
+    revisionSha256: text('revision_sha256').notNull(),
+    providerStatus: text('provider_status').notNull(),
+    direction: text('direction').notNull(),
+    amountMinor: money('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    bookingDate: date('booking_date'),
+    valueDate: date('value_date'),
+    transactionDate: date('transaction_date'),
+    bankCodeHash: text('bank_code_hash'),
+    counterpartyHash: text('counterparty_hash'),
+    referenceHash: text('reference_hash'),
+    canonicalization: text('canonicalization').notNull(),
+    ambiguityKind: text('ambiguity_kind').notNull(),
+    receiptId: uuid('receipt_id')
+      .notNull()
+      .references(() => enableBankingRawReceipts.id),
+    observedAt: instant('observed_at').notNull(),
+    isCurrent: boolean('is_current').notNull().default(true),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_transaction_observation_revision_uq').on(
+      table.ownerId,
+      table.connectionId,
+      table.revisionSha256,
+    ),
+    uniqueIndex('enable_banking_transaction_observation_current_uq')
+      .on(table.ownerId, table.connectionId, table.sourceKey)
+      .where(sql`${table.isCurrent} and ${table.sourceKey} is not null`),
+    index('enable_banking_transaction_observation_account_date_idx').on(
+      table.ownerId,
+      table.providerAccountId,
+      table.bookingDate,
+    ),
+    check(
+      'enable_banking_transaction_observation_status_ck',
+      sql`${table.providerStatus} in ('booked','cancelled','hold','other','pending','rejected','scheduled')`,
+    ),
+    check(
+      'enable_banking_transaction_observation_direction_ck',
+      sql`${table.direction} in ('credit','debit')`,
+    ),
+    check(
+      'enable_banking_transaction_observation_canonicalization_ck',
+      sql`${table.canonicalization} in ('eligible_booked','pending_projection_only','terminal_observation_only','quarantined_unstable_identity')`,
+    ),
+    check(
+      'enable_banking_transaction_observation_ambiguity_ck',
+      sql`${table.ambiguityKind} in ('unclassified_external_flow','unresolved_transfer')`,
+    ),
+  ],
+);
+
+export const enableBankingBalanceObservations = pgTable(
+  'enable_banking_balance_observations',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    revisionSha256: text('revision_sha256').notNull(),
+    balanceKind: text('balance_kind').notNull(),
+    amountMinor: money('amount_minor').notNull(),
+    currency: text('currency').notNull(),
+    sourceAsOf: instant('source_as_of').notNull(),
+    receiptId: uuid('receipt_id')
+      .notNull()
+      .references(() => enableBankingRawReceipts.id),
+    observedAt: instant('observed_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_balance_observation_revision_uq').on(
+      table.ownerId,
+      table.connectionId,
+      table.revisionSha256,
+    ),
+    index('enable_banking_balance_observation_account_time_idx').on(
+      table.ownerId,
+      table.providerAccountId,
+      table.sourceAsOf,
+    ),
+  ],
+);
+
+export const enableBankingHistoryCoverage = pgTable(
+  'enable_banking_history_coverage',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    sessionGeneration: uuid('session_generation').notNull(),
+    coveredFrom: date('covered_from').notNull(),
+    coveredThrough: date('covered_through').notNull(),
+    completedAt: instant('completed_at').notNull(),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => enableBankingRuns.id),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_history_coverage_run_uq').on(table.runId),
+    index('enable_banking_history_coverage_account_idx').on(
+      table.ownerId,
+      table.providerAccountId,
+      table.coveredFrom,
+      table.coveredThrough,
+    ),
+    check(
+      'enable_banking_history_coverage_order_ck',
+      sql`${table.coveredFrom} <= ${table.coveredThrough}`,
+    ),
+  ],
+);
+
+export const enableBankingCanonicalImports = pgTable(
+  'enable_banking_canonical_imports',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    sourceKey: text('source_key').notNull(),
+    revisionSha256: text('revision_sha256').notNull(),
+    canonicalTransactionId: uuid('canonical_transaction_id')
+      .notNull()
+      .references(() => financialTransactions.id),
+    commandId: uuid('command_id')
+      .notNull()
+      .references(() => commandRecords.id),
+    disposition: text('disposition').notNull(),
+    supersedesImportId: uuid('supersedes_import_id'),
+    effectiveAt: instant('effective_at').notNull(),
+    createdAt: instant('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_canonical_import_revision_uq').on(
+      table.ownerId,
+      table.connectionId,
+      table.sourceKey,
+      table.revisionSha256,
+    ),
+    index('enable_banking_canonical_import_transaction_idx').on(
+      table.ownerId,
+      table.canonicalTransactionId,
+    ),
+    check(
+      'enable_banking_canonical_import_disposition_ck',
+      sql`${table.disposition} in ('imported','corrected','cancelled')`,
+    ),
+  ],
+);
+
+export const enableBankingObservationMatches = pgTable(
+  'enable_banking_observation_matches',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    leftObservationId: uuid('left_observation_id')
+      .notNull()
+      .references(() => enableBankingTransactionObservations.id),
+    rightObservationId: uuid('right_observation_id')
+      .notNull()
+      .references(() => enableBankingTransactionObservations.id),
+    kind: text('kind').notNull(),
+    state: text('state').notNull(),
+    reason: text('reason').notNull(),
+    createdAt: instant('created_at').notNull(),
+    resolvedAt: instant('resolved_at'),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_observation_match_pair_uq').on(
+      table.ownerId,
+      table.leftObservationId,
+      table.rightObservationId,
+      table.kind,
+    ),
+    check(
+      'enable_banking_observation_match_kind_ck',
+      sql`${table.kind} in ('pending_booked','bank_to_cash','investment_transfer','internal_transfer','refund','reimbursement')`,
+    ),
+    check(
+      'enable_banking_observation_match_state_ck',
+      sql`${table.state} in ('candidate','confirmed','rejected')`,
+    ),
+  ],
+);
+
+export const enableBankingBalanceReconciliations = pgTable(
+  'enable_banking_balance_reconciliations',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    canonicalAccountId: uuid('canonical_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    runId: uuid('run_id')
+      .notNull()
+      .references(() => enableBankingRuns.id),
+    sourceAsOf: instant('source_as_of'),
+    providerBalanceMinor: money('provider_balance_minor'),
+    canonicalBalanceMinor: money('canonical_balance_minor'),
+    differenceMinor: money('difference_minor'),
+    currency: text('currency').notNull(),
+    materialityThresholdMinor: money('materiality_threshold_minor').notNull(),
+    status: text('status').notNull(),
+    createdAt: instant('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_balance_reconciliation_run_uq').on(table.runId),
+    index('enable_banking_balance_reconciliation_account_time_idx').on(
+      table.ownerId,
+      table.canonicalAccountId,
+      table.createdAt,
+    ),
+    check(
+      'enable_banking_balance_reconciliation_status_ck',
+      sql`${table.status} in ('reconciled','provider_stale','incomplete_history','unresolved_pending','material_mismatch','unavailable')`,
     ),
   ],
 );
