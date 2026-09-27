@@ -196,10 +196,19 @@ export async function completeEnableBankingCallback(state: string, code: string)
         throw new Error('Enable Banking account detail identity does not match the session.');
       }
       await finishReceipt(authorization, configuration.dataKey, details.receiptId);
+      let currency = account.currency;
+      if (currency === 'XXX') {
+        const balances = await api.getBalances(account.uid);
+        await finishReceipt(authorization, configuration.dataKey, balances.receiptId);
+        currency = resolveEnableBankingAccountCurrency(
+          currency,
+          balances.value.balances.map((balance) => balance.balanceAmount.currency),
+        );
+      }
       accounts.push({
         uid: account.uid,
         identificationHash: account.identificationHash,
-        currency: account.currency,
+        currency,
         displayHint: details.value.accountHint ?? details.value.displayName,
       });
     }
@@ -221,6 +230,15 @@ export async function completeEnableBankingCallback(state: string, code: string)
     );
     throw error;
   }
+}
+
+export function resolveEnableBankingAccountCurrency(
+  accountCurrency: string,
+  balanceCurrencies: readonly string[],
+): string {
+  if (accountCurrency !== 'XXX') return accountCurrency;
+  const observed = new Set(balanceCurrencies);
+  return observed.size === 1 && observed.has('EUR') ? 'EUR' : accountCurrency;
 }
 
 export async function getEnableBankingAccounts(ownerId: string) {

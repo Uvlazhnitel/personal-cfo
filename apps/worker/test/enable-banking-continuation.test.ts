@@ -19,8 +19,17 @@ describe('Enable Banking continuation polling', () => {
       transactionCount: 0,
     });
     expect(second.waitMilliseconds).toBe(2_000);
+    let repeated = second;
+    for (let observation = 3; observation < 10; observation += 1) {
+      repeated = assessEnableBankingContinuation(repeated.state, {
+        requestCursorHash: 'cursor-one',
+        responseCursorHash: 'cursor-one',
+        transactionCount: 0,
+      });
+      expect(repeated.waitMilliseconds).toBe(5_000);
+    }
     expect(() =>
-      assessEnableBankingContinuation(second.state, {
+      assessEnableBankingContinuation(repeated.state, {
         requestCursorHash: 'cursor-one',
         responseCursorHash: 'cursor-one',
         transactionCount: 0,

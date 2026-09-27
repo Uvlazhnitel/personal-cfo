@@ -423,7 +423,11 @@ function transactionStatus(value: unknown): EnableBankingTransactionStatus {
 
 function stringArray(value: unknown, label: string): readonly string[] {
   if (value === undefined || value === null) return Object.freeze([]);
-  return Object.freeze(array(value, label).map((item) => string(item, label, 2048)));
+  return Object.freeze(
+    array(value, label).map((item) =>
+      string(typeof item === 'string' ? item.trim() : item, label, 2048),
+    ),
+  );
 }
 
 function parseBankTransactionCode(
