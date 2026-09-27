@@ -204,6 +204,17 @@ describe('Enable Banking Swedbank Latvia contract binding', () => {
     ).toBeNull();
   });
 
+  it('trims observed Swedbank remittance padding while preserving strict content validation', () => {
+    const padded = {
+      ...ENABLE_BANKING_CONTRACT_FIXTURES.items.bookedCard,
+      remittance_information: ['  sanitized reference  '],
+    };
+    expect(decodeOne(padded).remittanceInformation).toEqual(['sanitized reference']);
+    expect(() => decodeOne({ ...padded, remittance_information: ['   '] })).toThrow(
+      'Remittance information',
+    );
+  });
+
   it('normalizes booked debits as evidence without constructing ledger authority', () => {
     const page = decodeEnableBankingTransactions(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage);
     const normalized = normalizeEnableBankingTransaction(page.transactions[0]!, fixtureAccount());

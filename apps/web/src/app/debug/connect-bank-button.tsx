@@ -20,7 +20,7 @@ export function ConnectBankButton() {
 
   return (
     <section>
-      <h2>Open Banking sandbox</h2>
+      <h2>Open Banking</h2>
       <button type="button" disabled={status === 'starting'} onClick={() => void connect()}>
         {status === 'starting' ? 'Connecting…' : 'Connect Bank'}
       </button>

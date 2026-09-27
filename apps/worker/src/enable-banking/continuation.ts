@@ -8,6 +8,8 @@ export type EnableBankingContinuationState = Readonly<{
 export const INITIAL_ENABLE_BANKING_CONTINUATION_STATE: EnableBankingContinuationState =
   Object.freeze({ cursorHash: null, emptyObservations: 0 });
 
+const MAX_EMPTY_CONTINUATION_OBSERVATIONS = 10;
+
 export function assessEnableBankingContinuation(
   state: EnableBankingContinuationState,
   input: Readonly<{
@@ -40,7 +42,7 @@ export function assessEnableBankingContinuation(
   }
   const emptyObservations =
     state.cursorHash === input.responseCursorHash ? state.emptyObservations + 1 : 1;
-  if (repeatsRequest && emptyObservations >= 3) {
+  if (repeatsRequest && emptyObservations >= MAX_EMPTY_CONTINUATION_OBSERVATIONS) {
     throw new DataInvariantError(
       'enable_banking.non_advancing_continuation',
       'Enable Banking empty continuation key did not advance after bounded polling.',
@@ -48,6 +50,6 @@ export function assessEnableBankingContinuation(
   }
   return Object.freeze({
     state: Object.freeze({ cursorHash: input.responseCursorHash, emptyObservations }),
-    waitMilliseconds: emptyObservations === 1 ? 1_000 : 2_000,
+    waitMilliseconds: emptyObservations === 1 ? 1_000 : emptyObservations === 2 ? 2_000 : 5_000,
   });
 }
