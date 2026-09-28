@@ -28,6 +28,7 @@ export const RECALCULATION_CAUSES = [
   'bank_sync',
   'bank_correction',
   'bank_transfer_confirmation',
+  'settings_change',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];
