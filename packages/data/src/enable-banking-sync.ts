@@ -339,7 +339,13 @@ async function loadActivationState(
         });
   if (balanceRow === undefined || receipt === undefined || balanceRow.currency !== 'EUR')
     blockers.push('booked_balance_unavailable');
-  const cutoffDate = balanceRow === undefined ? null : rigaDate(balanceRow.sourceAsOf);
+  const balanceSourceAsOf =
+    balanceRow === undefined || receipt === undefined
+      ? null
+      : new Date(balanceRow.sourceAsOf).getTime() <= new Date(receipt.receivedAt).getTime()
+        ? balanceRow.sourceAsOf
+        : receipt.receivedAt;
+  const cutoffDate = balanceSourceAsOf === null ? null : rigaDate(balanceSourceAsOf);
   if (
     cutoffDate !== null &&
     booked.some((item) => {
@@ -408,11 +414,11 @@ async function loadActivationState(
     account,
     observations: Object.freeze(observations),
     balance:
-      balanceRow === undefined || receipt === undefined
+      balanceRow === undefined || receipt === undefined || balanceSourceAsOf === null
         ? null
         : Object.freeze({
             revisionSha256: balanceRow.revisionSha256,
-            sourceAsOf: balanceRow.sourceAsOf,
+            sourceAsOf: balanceSourceAsOf,
             receivedAt: receipt.receivedAt,
             runId: receipt.runId,
             amountMinor: balanceRow.amountMinor,
@@ -717,6 +723,7 @@ export async function appendEnableBankingCanonicalBatch(
   let mutations = 0;
   let earliestAffectedAt: string | null = null;
   const transactionIds: string[] = [];
+  let persistedDifferenceMinor: bigint | null = null;
   let persistedReconciliationStatus:
     | 'reconciled'
     | 'provider_stale'
@@ -928,6 +935,7 @@ export async function appendEnableBankingCanonicalBatch(
     earliestAffectedAt = earliest(earliestAffectedAt, transaction.effectiveAt);
   }
   if (input.balance !== null) {
+    const balanceCutoffDate = rigaDate(input.balance.sourceAsOf);
     const ledger = await tx.execute(sql<{ balance: bigint | string }>`
       select coalesce(sum(e.amount_minor), 0)::bigint as balance
         from account_entries e
@@ -939,12 +947,13 @@ export async function appendEnableBankingCanonicalBatch(
          and e.account_id = ${input.canonicalAccountId}
          and v.is_current = true
          and v.booking_status = 'booked'
-         and v.effective_at <= ${input.balance.sourceAsOf}::timestamptz
+         and (v.effective_at at time zone 'Europe/Riga')::date <= ${balanceCutoffDate}::date
     `);
     const canonicalBalanceMinor = BigInt(
       (ledger.rows[0]?.['balance'] as bigint | string | undefined) ?? 0,
     );
     const differenceMinor = input.balance.amountMinor - canonicalBalanceMinor;
+    persistedDifferenceMinor = differenceMinor;
     const absoluteDifference = differenceMinor < 0n ? -differenceMinor : differenceMinor;
     const reconciliationStatus = input.balance.providerStale
       ? 'provider_stale'
@@ -1008,6 +1017,7 @@ export async function appendEnableBankingCanonicalBatch(
       transactionIds: Object.freeze(transactionIds),
       mutationCount: mutations,
       reconciliationStatus: persistedReconciliationStatus,
+      reconciliationDifferenceMinor: persistedDifferenceMinor?.toString() ?? null,
     }),
   });
 }
@@ -1184,6 +1194,12 @@ export async function executeEnableBankingInitialActivation(
         },
         now: input.now,
       });
+      if (batch.result['reconciliationDifferenceMinor'] !== '0') {
+        throw new DataInvariantError(
+          'enable_banking.activation_reconciliation_not_exact',
+          'Canonical activation requires an exact zero-minor-unit reconciliation.',
+        );
+      }
       await tx
         .update(enableBankingProviderAccounts)
         .set({ ownerActivatedAt: input.now, updatedAt: input.now })
