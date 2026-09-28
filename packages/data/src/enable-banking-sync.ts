@@ -84,6 +84,7 @@ export type EnableBankingActivationBlocker =
   | 'booked_identity_duplicate'
   | 'booked_after_balance_cutoff'
   | 'booked_balance_unavailable'
+  | 'materiality_settings_unavailable'
   | 'opening_balance_mismatch';
 
 export type EnableBankingActivationPlan = Readonly<{
@@ -256,6 +257,8 @@ async function loadActivationState(
   }
   if (account?.ownerActivatedAt !== null && account !== null) blockers.push('already_activated');
   if (!validEvidence(evidence)) blockers.push('invalid_opening_evidence');
+  if ((await findEffectiveMaterialityThresholdMinor(db, ownerId)) === null)
+    blockers.push('materiality_settings_unavailable');
 
   const canonicalAccountId = account?.canonicalAccountId ?? null;
   if (canonicalAccountId !== null) {
@@ -478,19 +481,14 @@ export function activateEnableBankingCanonicalImport(
   );
 }
 
-export async function loadEffectiveMaterialityThresholdMinor(
+async function findEffectiveMaterialityThresholdMinor(
   db: Database | DatabaseTransaction,
   ownerId: string,
-): Promise<bigint> {
+): Promise<bigint | null> {
   const row = await db.query.settingsVersions.findFirst({
     where: and(eq(settingsVersions.ownerId, ownerId), eq(settingsVersions.isCurrent, true)),
   });
-  if (row === undefined) {
-    throw new DataInvariantError(
-      'enable_banking.missing_materiality',
-      'Effective financial settings are unavailable.',
-    );
-  }
+  if (row === undefined) return null;
   const payload = decodeSourceJson(row.payload) as Record<string, unknown>;
   const spending = payload['spendingBaseline'];
   const threshold =
@@ -501,7 +499,15 @@ export async function loadEffectiveMaterialityThresholdMinor(
     typeof threshold === 'object' && threshold !== null
       ? (threshold as Record<string, unknown>)['amountMinor']
       : null;
-  if (typeof minor !== 'bigint' || minor < 0n) {
+  return typeof minor === 'bigint' && minor >= 0n ? minor : null;
+}
+
+export async function loadEffectiveMaterialityThresholdMinor(
+  db: Database | DatabaseTransaction,
+  ownerId: string,
+): Promise<bigint> {
+  const minor = await findEffectiveMaterialityThresholdMinor(db, ownerId);
+  if (minor === null) {
     throw new DataInvariantError(
       'enable_banking.missing_materiality',
       'Effective financial settings do not expose a valid materiality threshold.',
