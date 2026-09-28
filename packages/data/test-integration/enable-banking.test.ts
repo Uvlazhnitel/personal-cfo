@@ -313,17 +313,6 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       version: 0n,
       updatedAt: '2026-09-25T09:10:00Z',
     });
-    await context.db.insert(settingsVersions).values({
-      ownerId,
-      version: 'enable-banking-test-v1',
-      effectiveFrom: '2026-01-01T00:00:00Z',
-      payload: encodeSourceJson({
-        spendingBaseline: {
-          materialityThreshold: { amountMinor: 1_000n, currency: 'EUR' },
-        },
-      }),
-      isCurrent: true,
-    });
     const activationBalances = () => {
       const value = fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances) as {
         balances: Record<string, unknown>[];
@@ -410,6 +399,25 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         balanceBoundaryAt: '2026-08-31T21:00:00.000Z',
         statementSha256: 'a'.repeat(64),
       };
+      const missingSettingsPlan = await prepareEnableBankingActivation(
+        context.db,
+        ownerId,
+        evidence,
+        '2026-09-25T09:19:00Z',
+      );
+      expect(missingSettingsPlan.ready).toBe(false);
+      expect(missingSettingsPlan.blockers).toContain('materiality_settings_unavailable');
+      await context.db.insert(settingsVersions).values({
+        ownerId,
+        version: 'enable-banking-test-v1',
+        effectiveFrom: '2026-01-01T00:00:00Z',
+        payload: encodeSourceJson({
+          spendingBaseline: {
+            materialityThreshold: { amountMinor: 1_000n, currency: 'EUR' },
+          },
+        }),
+        isCurrent: true,
+      });
       const plan = await prepareEnableBankingActivation(
         context.db,
         ownerId,
