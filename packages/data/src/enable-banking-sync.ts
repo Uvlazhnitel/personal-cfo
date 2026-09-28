@@ -1,4 +1,7 @@
-import { and, eq, isNotNull, lte, sql } from 'drizzle-orm';
+import { createHash } from 'node:crypto';
+
+import { and, eq, inArray, isNotNull, lte, sql } from 'drizzle-orm';
+import type { PgBoss } from 'pg-boss';
 import {
   createAccountEntry,
   createCanonicalTransaction,
@@ -7,6 +10,7 @@ import {
   parseInstant,
 } from '@personal-cfo/domain';
 
+import { executeFinancialCommand } from './commands.js';
 import type { CommandMutationResult } from './commands.js';
 import type { Database } from './database.js';
 import { DataConflictError, DataInvariantError } from './errors.js';
@@ -17,11 +21,13 @@ import {
   accountBalanceSnapshots,
   accountEntries,
   accounts,
+  enableBankingBalanceObservations,
   enableBankingBalanceReconciliations,
   enableBankingCanonicalImports,
   enableBankingConnections,
   enableBankingHistoryCoverage,
   enableBankingObservationMatches,
+  enableBankingOpeningBalanceEvidence,
   enableBankingProviderAccounts,
   enableBankingRawReceipts,
   enableBankingRuns,
@@ -57,8 +63,367 @@ export type EnableBankingCanonicalObservation = Readonly<{
   materiality: 'material' | 'non_material';
 }>;
 
+export type EnableBankingOpeningBalanceEvidenceInput = Readonly<{
+  providerAccountId: string;
+  openingBalanceMinor: bigint;
+  currency: 'EUR';
+  statementPeriodFrom: string;
+  statementPeriodThrough: string;
+  balanceBoundaryAt: string;
+  statementSha256: string;
+}>;
+
+export type EnableBankingActivationBlocker =
+  | 'account_not_ready'
+  | 'already_activated'
+  | 'opening_balance_already_exists'
+  | 'existing_canonical_imports'
+  | 'invalid_opening_evidence'
+  | 'history_coverage_incomplete'
+  | 'booked_observation_ineligible'
+  | 'booked_identity_duplicate'
+  | 'booked_after_balance_cutoff'
+  | 'booked_balance_unavailable'
+  | 'opening_balance_mismatch';
+
+export type EnableBankingActivationPlan = Readonly<{
+  ready: boolean;
+  blockers: readonly EnableBankingActivationBlocker[];
+  planFingerprint: string;
+  observationSetSha256: string;
+  providerBalanceRevisionSha256: string | null;
+  bookedCount: number;
+  pendingCount: number;
+  coverageFrom: string | null;
+  coverageThrough: string | null;
+  reconciliation: 'exact' | 'mismatch' | 'unavailable';
+  expectedCanonicalTransactions: number;
+  expectedCanonicalImports: number;
+  expectedUnresolvedAmbiguities: number;
+}>;
+
+type ActivationState = Readonly<{
+  plan: EnableBankingActivationPlan;
+  account: typeof enableBankingProviderAccounts.$inferSelect | null;
+  observations: readonly EnableBankingCanonicalObservation[];
+  balance: Readonly<{
+    revisionSha256: string;
+    sourceAsOf: string;
+    receivedAt: string;
+    runId: string;
+    amountMinor: bigint;
+  }> | null;
+}>;
+
 function earliest(left: string | null, right: string): string {
   return left === null || right < left ? right : left;
+}
+
+const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/u;
+const SHA256 = /^[0-9a-f]{64}$/u;
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value, 'utf8').digest('hex');
+}
+
+function economicDate(
+  observation: typeof enableBankingTransactionObservations.$inferSelect,
+): string | null {
+  return observation.bookingDate ?? observation.valueDate ?? observation.transactionDate;
+}
+
+function dateAtNoonUtc(value: string): string {
+  return parseInstant(`${value}T12:00:00.000Z`);
+}
+
+function rigaDate(value: string): string {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Riga',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(new Date(value));
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value;
+  return `${part('year')}-${part('month')}-${part('day')}`;
+}
+
+function rigaMidnight(value: string): string {
+  const guess = Date.parse(`${value}T00:00:00.000Z`);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Riga',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(guess));
+  const number = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((candidate) => candidate.type === type)?.value);
+  const represented = Date.UTC(
+    number('year'),
+    number('month') - 1,
+    number('day'),
+    number('hour'),
+    number('minute'),
+    number('second'),
+  );
+  return new Date(guess - (represented - guess)).toISOString();
+}
+
+function validEvidence(input: EnableBankingOpeningBalanceEvidenceInput): boolean {
+  try {
+    return (
+      input.currency === 'EUR' &&
+      ISO_DATE.test(input.statementPeriodFrom) &&
+      ISO_DATE.test(input.statementPeriodThrough) &&
+      input.statementPeriodFrom <= input.statementPeriodThrough &&
+      SHA256.test(input.statementSha256) &&
+      input.balanceBoundaryAt === rigaMidnight(input.statementPeriodFrom)
+    );
+  } catch {
+    return false;
+  }
+}
+
+function activationObservationSetSha256(
+  observations: readonly EnableBankingCanonicalObservation[],
+): string {
+  return sha256(
+    observations
+      .map((item) =>
+        [
+          item.sourceKey,
+          item.revisionSha256,
+          item.providerStatus,
+          item.amountMinor.toString(),
+          item.currency,
+          item.effectiveAt,
+          item.ambiguityKind,
+        ].join('|'),
+      )
+      .sort()
+      .join('\n'),
+  );
+}
+
+function activationFingerprint(
+  input: EnableBankingOpeningBalanceEvidenceInput,
+  observationSetSha256: string,
+  balanceRevision: string | null,
+): string {
+  return sha256(
+    [
+      'enable-banking-activation-v1',
+      input.providerAccountId,
+      input.openingBalanceMinor.toString(),
+      input.currency,
+      input.statementPeriodFrom,
+      input.statementPeriodThrough,
+      input.balanceBoundaryAt,
+      input.statementSha256,
+      observationSetSha256,
+      balanceRevision ?? '-',
+    ].join('|'),
+  );
+}
+
+async function loadActivationState(
+  db: Database | DatabaseTransaction,
+  ownerId: string,
+  evidence: EnableBankingOpeningBalanceEvidenceInput,
+  now: string,
+): Promise<ActivationState> {
+  const blockers: EnableBankingActivationBlocker[] = [];
+  const account =
+    (await db.query.enableBankingProviderAccounts.findFirst({
+      where: and(
+        eq(enableBankingProviderAccounts.id, evidence.providerAccountId),
+        eq(enableBankingProviderAccounts.ownerId, ownerId),
+        isNotNull(enableBankingProviderAccounts.canonicalAccountId),
+      ),
+    })) ?? null;
+  if (
+    account === null ||
+    account.currency !== 'EUR' ||
+    account.sessionGeneration === null ||
+    account.identityVerifiedAt === null ||
+    account.transactionIdentityVerifiedAt === null
+  ) {
+    blockers.push('account_not_ready');
+  }
+  if (account?.ownerActivatedAt !== null && account !== null) blockers.push('already_activated');
+  if (!validEvidence(evidence)) blockers.push('invalid_opening_evidence');
+
+  const canonicalAccountId = account?.canonicalAccountId ?? null;
+  if (canonicalAccountId !== null) {
+    const opening = await db.query.enableBankingOpeningBalanceEvidence.findFirst({
+      where: and(
+        eq(enableBankingOpeningBalanceEvidence.ownerId, ownerId),
+        eq(enableBankingOpeningBalanceEvidence.canonicalAccountId, canonicalAccountId),
+      ),
+    });
+    if (opening !== undefined) blockers.push('opening_balance_already_exists');
+  }
+  if (account !== null) {
+    const existingImport = await db.query.enableBankingCanonicalImports.findFirst({
+      where: and(
+        eq(enableBankingCanonicalImports.ownerId, ownerId),
+        eq(enableBankingCanonicalImports.connectionId, account.connectionId),
+      ),
+    });
+    if (existingImport !== undefined) blockers.push('existing_canonical_imports');
+  }
+
+  const current =
+    account === null
+      ? []
+      : await db.query.enableBankingTransactionObservations.findMany({
+          where: and(
+            eq(enableBankingTransactionObservations.ownerId, ownerId),
+            eq(enableBankingTransactionObservations.connectionId, account.connectionId),
+            eq(enableBankingTransactionObservations.providerAccountId, account.id),
+            eq(enableBankingTransactionObservations.isCurrent, true),
+          ),
+        });
+  const booked = current.filter((item) => item.providerStatus === 'booked');
+  const pendingCount = current.filter((item) =>
+    ['pending', 'hold'].includes(item.providerStatus),
+  ).length;
+  const ineligible = booked.some(
+    (item) =>
+      item.sourceKey === null ||
+      item.currency !== 'EUR' ||
+      item.canonicalization !== 'eligible_booked' ||
+      economicDate(item) === null,
+  );
+  if (ineligible) blockers.push('booked_observation_ineligible');
+  const sourceKeys = booked.flatMap((item) => (item.sourceKey === null ? [] : [item.sourceKey]));
+  if (new Set(sourceKeys).size !== booked.length) blockers.push('booked_identity_duplicate');
+
+  const coverage = await loadMergedEnableBankingCoverage(db, ownerId, now);
+  const firstCoverage = coverage[0] ?? null;
+  const lastCoverage = coverage.at(-1) ?? null;
+  const coverageComplete =
+    coverage.length === 1 &&
+    firstCoverage?.coveredFrom === evidence.statementPeriodFrom &&
+    lastCoverage !== null &&
+    evidence.statementPeriodThrough <= lastCoverage.coveredThrough;
+  if (!coverageComplete) blockers.push('history_coverage_incomplete');
+
+  const balanceRow =
+    account === null
+      ? undefined
+      : await db.query.enableBankingBalanceObservations.findFirst({
+          where: and(
+            eq(enableBankingBalanceObservations.ownerId, ownerId),
+            eq(enableBankingBalanceObservations.connectionId, account.connectionId),
+            eq(enableBankingBalanceObservations.providerAccountId, account.id),
+            inArray(enableBankingBalanceObservations.balanceKind, [
+              'interim_booked',
+              'closing_booked',
+            ]),
+          ),
+          orderBy: (table, { desc }) => [desc(table.sourceAsOf), desc(table.observedAt)],
+        });
+  const receipt =
+    balanceRow === undefined
+      ? undefined
+      : await db.query.enableBankingRawReceipts.findFirst({
+          where: eq(enableBankingRawReceipts.id, balanceRow.receiptId),
+        });
+  if (balanceRow === undefined || receipt === undefined || balanceRow.currency !== 'EUR')
+    blockers.push('booked_balance_unavailable');
+  const cutoffDate = balanceRow === undefined ? null : rigaDate(balanceRow.sourceAsOf);
+  if (
+    cutoffDate !== null &&
+    booked.some((item) => {
+      const date = economicDate(item);
+      return date !== null && date > cutoffDate;
+    })
+  )
+    blockers.push('booked_after_balance_cutoff');
+  if (cutoffDate !== null && lastCoverage !== null && lastCoverage.coveredThrough < cutoffDate)
+    blockers.push('history_coverage_incomplete');
+
+  const observations = booked.flatMap((item): EnableBankingCanonicalObservation[] => {
+    const date = economicDate(item);
+    if (
+      item.sourceKey === null ||
+      date === null ||
+      item.currency !== 'EUR' ||
+      item.canonicalization !== 'eligible_booked' ||
+      (cutoffDate !== null && date > cutoffDate)
+    )
+      return [];
+    return [
+      Object.freeze({
+        sourceKey: item.sourceKey,
+        revisionSha256: item.revisionSha256,
+        providerStatus: item.providerStatus,
+        amountMinor: item.amountMinor,
+        currency: item.currency,
+        effectiveAt: dateAtNoonUtc(date),
+        ambiguityKind: item.ambiguityKind as EnableBankingCanonicalObservation['ambiguityKind'],
+        materiality: 'non_material',
+      }),
+    ];
+  });
+  const observationSetSha256 = activationObservationSetSha256(observations);
+  const movement = observations.reduce((sum, item) => sum + item.amountMinor, 0n);
+  const reconciliation =
+    balanceRow === undefined
+      ? ('unavailable' as const)
+      : evidence.openingBalanceMinor + movement === balanceRow.amountMinor
+        ? ('exact' as const)
+        : ('mismatch' as const);
+  if (reconciliation === 'mismatch') blockers.push('opening_balance_mismatch');
+  const uniqueBlockers = Object.freeze([...new Set(blockers)]);
+  const planFingerprint = activationFingerprint(
+    evidence,
+    observationSetSha256,
+    balanceRow?.revisionSha256 ?? null,
+  );
+  return Object.freeze({
+    plan: Object.freeze({
+      ready: uniqueBlockers.length === 0,
+      blockers: uniqueBlockers,
+      planFingerprint,
+      observationSetSha256,
+      providerBalanceRevisionSha256: balanceRow?.revisionSha256 ?? null,
+      bookedCount: booked.length,
+      pendingCount,
+      coverageFrom: firstCoverage?.coveredFrom ?? null,
+      coverageThrough: lastCoverage?.coveredThrough ?? null,
+      reconciliation,
+      expectedCanonicalTransactions: booked.length + 1,
+      expectedCanonicalImports: booked.length,
+      expectedUnresolvedAmbiguities: booked.length,
+    }),
+    account,
+    observations: Object.freeze(observations),
+    balance:
+      balanceRow === undefined || receipt === undefined
+        ? null
+        : Object.freeze({
+            revisionSha256: balanceRow.revisionSha256,
+            sourceAsOf: balanceRow.sourceAsOf,
+            receivedAt: receipt.receivedAt,
+            runId: receipt.runId,
+            amountMinor: balanceRow.amountMinor,
+          }),
+  });
+}
+
+export async function prepareEnableBankingActivation(
+  db: Database,
+  ownerId: string,
+  evidence: EnableBankingOpeningBalanceEvidenceInput,
+  now: string,
+): Promise<EnableBankingActivationPlan> {
+  return (await loadActivationState(db, ownerId, evidence, now)).plan;
 }
 
 export async function loadEnableBankingActivationReadiness(
@@ -95,54 +460,26 @@ export async function loadEnableBankingActivationReadiness(
   return Object.freeze({ allowed: unmet.length === 0, unmet: Object.freeze(unmet) });
 }
 
-export async function activateEnableBankingCanonicalImport(
+export function activateEnableBankingCanonicalImport(
   db: Database,
   ownerId: string,
   providerAccountId: string,
   now: string,
 ): Promise<void> {
-  await db.transaction(async (tx) => {
-    const account = await tx.query.enableBankingProviderAccounts.findFirst({
-      where: and(
-        eq(enableBankingProviderAccounts.id, providerAccountId),
-        eq(enableBankingProviderAccounts.ownerId, ownerId),
-        isNotNull(enableBankingProviderAccounts.canonicalAccountId),
-      ),
-    });
-    if (
-      account === undefined ||
-      account.currency !== 'EUR' ||
-      account.sessionGeneration === null ||
-      account.identityVerifiedAt === null ||
-      account.transactionIdentityVerifiedAt === null
-    ) {
-      throw new DataInvariantError(
-        'enable_banking.activation_prerequisites_missing',
-        'Enable Banking canonical activation prerequisites are incomplete.',
-      );
-    }
-    const coverage = await tx.query.enableBankingHistoryCoverage.findFirst({
-      where: and(
-        eq(enableBankingHistoryCoverage.ownerId, ownerId),
-        eq(enableBankingHistoryCoverage.providerAccountId, providerAccountId),
-        eq(enableBankingHistoryCoverage.sessionGeneration, account.sessionGeneration),
-      ),
-    });
-    if (coverage === undefined) {
-      throw new DataInvariantError(
-        'enable_banking.activation_coverage_missing',
-        'Enable Banking canonical activation requires closed history coverage.',
-      );
-    }
-    await tx
-      .update(enableBankingProviderAccounts)
-      .set({ ownerActivatedAt: now, updatedAt: now })
-      .where(eq(enableBankingProviderAccounts.id, providerAccountId));
-  });
+  void db;
+  void ownerId;
+  void providerAccountId;
+  void now;
+  return Promise.reject(
+    new DataInvariantError(
+      'enable_banking.opening_balance_required',
+      'Legacy activation is disabled; use the atomic opening-balance activation command.',
+    ),
+  );
 }
 
 export async function loadEffectiveMaterialityThresholdMinor(
-  db: Database,
+  db: Database | DatabaseTransaction,
   ownerId: string,
 ): Promise<bigint> {
   const row = await db.query.settingsVersions.findFirst({
@@ -666,6 +1003,225 @@ export async function appendEnableBankingCanonicalBatch(
       mutationCount: mutations,
       reconciliationStatus: persistedReconciliationStatus,
     }),
+  });
+}
+
+export async function executeEnableBankingInitialActivation(
+  db: Database,
+  boss: PgBoss,
+  input: Readonly<{
+    ownerId: string;
+    evidence: EnableBankingOpeningBalanceEvidenceInput;
+    expectedPlanFingerprint: string;
+    confirmation: 'ACTIVATE_CANONICAL_IMPORT';
+    now: string;
+  }>,
+): Promise<
+  Readonly<{
+    commandId: string;
+    replayed: boolean;
+    inputVersion: bigint;
+    openingTransactionId: string;
+    bookedImported: number;
+    reconciliationStatus: string;
+  }>
+> {
+  if (input.confirmation !== 'ACTIVATE_CANONICAL_IMPORT') {
+    throw new DataInvariantError(
+      'enable_banking.activation_confirmation_missing',
+      'Canonical activation requires explicit owner confirmation.',
+    );
+  }
+  if (!SHA256.test(input.expectedPlanFingerprint)) {
+    throw new DataInvariantError(
+      'enable_banking.activation_plan_invalid',
+      'Canonical activation requires a valid activation plan fingerprint.',
+    );
+  }
+  const idempotencyKey = `enable-banking-activate:${input.evidence.providerAccountId}:${input.expectedPlanFingerprint.slice(0, 16)}`;
+  const command = await executeFinancialCommand(
+    db,
+    boss,
+    {
+      ownerId: input.ownerId,
+      kind: 'bank_sync',
+      idempotencyKey,
+      request: {
+        evidence: input.evidence,
+        expectedPlanFingerprint: input.expectedPlanFingerprint,
+        confirmation: input.confirmation,
+      },
+      asOf: input.now,
+      effectiveDate: rigaDate(input.now),
+      now: input.now,
+    },
+    async (tx, commandId) => {
+      const state = await loadActivationState(tx, input.ownerId, input.evidence, input.now);
+      if (!state.plan.ready) {
+        throw new DataInvariantError(
+          'enable_banking.activation_plan_blocked',
+          `Canonical activation is blocked: ${state.plan.blockers.join(',')}.`,
+        );
+      }
+      if (state.plan.planFingerprint !== input.expectedPlanFingerprint) {
+        throw new DataConflictError(
+          'enable_banking.activation_plan_stale',
+          'Provider evidence changed after the activation dry run.',
+        );
+      }
+      if (
+        state.account === null ||
+        state.account.canonicalAccountId === null ||
+        state.balance === null ||
+        state.plan.coverageFrom === null ||
+        state.plan.coverageThrough === null
+      ) {
+        throw new DataInvariantError(
+          'enable_banking.activation_state_incomplete',
+          'Canonical activation state is incomplete.',
+        );
+      }
+      const threshold = await loadEffectiveMaterialityThresholdMinor(tx, input.ownerId);
+      const observations = state.observations.map((observation) => {
+        const absolute =
+          observation.amountMinor < 0n ? -observation.amountMinor : observation.amountMinor;
+        return Object.freeze({
+          ...observation,
+          materiality: absolute >= threshold ? ('material' as const) : ('non_material' as const),
+        });
+      });
+      const openingTransactionId = generateUuidV7('enable-banking-opening-balance');
+      const openingEffectiveAt = parseInstant(
+        new Date(new Date(input.evidence.balanceBoundaryAt).getTime() - 1).toISOString(),
+      );
+      const opening = createCanonicalTransaction({
+        id: openingTransactionId as never,
+        effectiveAt: openingEffectiveAt,
+        bookingStatus: 'booked',
+        kind: 'opening_balance',
+        entries: [
+          createAccountEntry({
+            id: generateUuidV7('enable-banking-opening-entry') as never,
+            transactionId: openingTransactionId as never,
+            accountId: state.account.canonicalAccountId as never,
+            amount: { amountMinor: input.evidence.openingBalanceMinor, currency: EUR },
+            role: 'opening_balance',
+          }),
+        ],
+      });
+      await tx.insert(financialTransactions).values({
+        id: opening.id,
+        ownerId: input.ownerId,
+        createdAt: input.now,
+      });
+      await tx.insert(transactionVersions).values({
+        ownerId: input.ownerId,
+        transactionId: opening.id,
+        revision: 1,
+        kind: opening.kind,
+        bookingStatus: opening.bookingStatus,
+        effectiveAt: opening.effectiveAt,
+        payload: encodeSourceJson(opening),
+        isCurrent: true,
+        supersededAt: null,
+      });
+      await tx.insert(accountEntries).values({
+        ownerId: input.ownerId,
+        transactionId: opening.id,
+        transactionRevision: 1,
+        entryId: opening.entries[0]!.id,
+        accountId: state.account.canonicalAccountId,
+        amountMinor: opening.entries[0]!.amount.amountMinor,
+        currency: 'EUR',
+        role: 'opening_balance',
+      });
+      await tx.insert(enableBankingOpeningBalanceEvidence).values({
+        id: generateUuidV7('enable-banking-opening-evidence'),
+        ownerId: input.ownerId,
+        connectionId: state.account.connectionId,
+        providerAccountId: state.account.id,
+        canonicalAccountId: state.account.canonicalAccountId,
+        canonicalTransactionId: opening.id,
+        commandId,
+        openingBalanceMinor: input.evidence.openingBalanceMinor,
+        currency: 'EUR',
+        statementPeriodFrom: input.evidence.statementPeriodFrom,
+        statementPeriodThrough: input.evidence.statementPeriodThrough,
+        balanceBoundaryAt: input.evidence.balanceBoundaryAt,
+        statementSha256: input.evidence.statementSha256,
+        observationSetSha256: state.plan.observationSetSha256,
+        bookedObservationCount: state.plan.bookedCount,
+        providerBalanceRevisionSha256: state.balance.revisionSha256,
+        createdAt: input.now,
+      });
+      const batch = await appendEnableBankingCanonicalBatch(tx, {
+        ownerId: input.ownerId,
+        connectionId: state.account.connectionId,
+        canonicalAccountId: state.account.canonicalAccountId,
+        commandId,
+        observations,
+        balance: {
+          sourceAsOf: state.balance.sourceAsOf,
+          receivedAt: state.balance.receivedAt,
+          staleAt: new Date(
+            new Date(state.balance.sourceAsOf).getTime() + 48 * 60 * 60_000,
+          ).toISOString(),
+          amountMinor: state.balance.amountMinor,
+          historyComplete: true,
+          unresolvedPending: state.plan.pendingCount > 0,
+          providerStale:
+            new Date(state.balance.sourceAsOf).getTime() <
+            new Date(input.now).getTime() - 48 * 60 * 60_000,
+          materialityThresholdMinor: threshold,
+          runId: state.balance.runId,
+          providerAccountId: state.account.id,
+        },
+        now: input.now,
+      });
+      await tx
+        .update(enableBankingProviderAccounts)
+        .set({ ownerActivatedAt: input.now, updatedAt: input.now })
+        .where(
+          and(
+            eq(enableBankingProviderAccounts.id, state.account.id),
+            eq(enableBankingProviderAccounts.ownerId, input.ownerId),
+          ),
+        );
+      return Object.freeze({
+        mutated: true,
+        entityType: 'enable_banking_activation',
+        entityId: state.account.id,
+        earliestAffectedAt: opening.effectiveAt,
+        result: Object.freeze({
+          openingTransactionId: opening.id,
+          bookedImported: state.plan.bookedCount,
+          mutationCount: Number(batch.result['mutationCount'] ?? state.plan.bookedCount) + 1,
+          reconciliationStatus: batch.result['reconciliationStatus'] ?? 'unavailable',
+          planFingerprint: state.plan.planFingerprint,
+        }),
+      });
+    },
+  );
+  const openingTransactionId = command.result['openingTransactionId'];
+  const bookedImported = command.result['bookedImported'];
+  const reconciliationStatus = command.result['reconciliationStatus'];
+  if (
+    typeof openingTransactionId !== 'string' ||
+    typeof bookedImported !== 'number' ||
+    typeof reconciliationStatus !== 'string'
+  ) {
+    throw new DataInvariantError(
+      'enable_banking.activation_result_invalid',
+      'Stored activation result is malformed.',
+    );
+  }
+  return Object.freeze({
+    commandId: command.commandId,
+    replayed: command.replayed,
+    inputVersion: command.inputVersion,
+    openingTransactionId,
+    bookedImported,
+    reconciliationStatus,
   });
 }
 

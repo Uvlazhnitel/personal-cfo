@@ -18,6 +18,8 @@
     "db:migrate": "pnpm --filter @personal-cfo/worker run cli:migrate",
     "db:check": "pnpm --filter @personal-cfo/data run db:check",
     "enable-banking:fetch": "pnpm --filter @personal-cfo/worker run cli:enable-banking-fetch",
+    "enable-banking:prepare-activation": "pnpm --filter @personal-cfo/worker run cli:enable-banking-prepare-activation",
+    "enable-banking:review-transfers": "pnpm --filter @personal-cfo/worker run cli:enable-banking-review-transfers",
     "enable-banking:sync": "pnpm --filter @personal-cfo/worker run cli:enable-banking-sync",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "synthetic:import": "pnpm --filter @personal-cfo/worker run cli:synthetic-import",
