@@ -3,10 +3,13 @@ import { createHash } from 'node:crypto';
 import { and, eq, sql } from 'drizzle-orm';
 import type { PgBoss } from 'pg-boss';
 import {
+  EUR,
+  MAX_MONEY_MINOR,
   createCashReconciliationResolution,
   createCashReconciliation,
   createCanonicalTransaction,
   createEconomicFlow,
+  createMoney,
   createSinkingFundAllocation,
 } from '@personal-cfo/domain';
 import type {
@@ -41,6 +44,7 @@ import {
   flowClassifications,
   ownerInputVersions,
   recalculationRecords,
+  settingsVersions,
   sinkingEvents,
   transactionVersions,
 } from './schema.js';
@@ -65,6 +69,30 @@ export type FinancialCommandInput = Readonly<{
   effectiveDate: string;
   now: string;
 }>;
+
+export type MaterialitySettingsInput = Readonly<{
+  amountMinor: bigint;
+  currency: 'EUR';
+  effectiveAt: string;
+  effectiveDate: string;
+}>;
+
+function settingsRecord(value: unknown, code: string): Readonly<Record<string, unknown>> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new DataInvariantError(code, 'Settings payload must be an object.');
+  }
+  return value as Readonly<Record<string, unknown>>;
+}
+
+function persistedMaterialityThreshold(payload: Readonly<Record<string, unknown>>): bigint | null {
+  const spending = payload['spendingBaseline'];
+  if (typeof spending !== 'object' || spending === null || Array.isArray(spending)) return null;
+  const threshold = (spending as Readonly<Record<string, unknown>>)['materialityThreshold'];
+  if (typeof threshold !== 'object' || threshold === null || Array.isArray(threshold)) return null;
+  const record = threshold as Readonly<Record<string, unknown>>;
+  const amount = record['amountMinor'];
+  return typeof amount === 'bigint' && record['currency'] === 'EUR' ? amount : null;
+}
 
 function requestHash(value: unknown): string {
   return createHash('sha256')
@@ -249,6 +277,119 @@ export async function executeFinancialCommand(
         .where(eq(commandRecords.id, commandId));
       throw error;
     }
+  });
+}
+
+export async function appendMaterialitySettingsVersion(
+  tx: DatabaseTransaction,
+  ownerId: string,
+  input: MaterialitySettingsInput,
+): Promise<CommandMutationResult> {
+  if (
+    typeof input.amountMinor !== 'bigint' ||
+    input.amountMinor < 0n ||
+    input.amountMinor > MAX_MONEY_MINOR ||
+    input.currency !== EUR
+  ) {
+    throw new DataInvariantError(
+      'settings.invalid_materiality',
+      'Materiality threshold must be a non-negative EUR amount in minor units.',
+    );
+  }
+  const threshold = createMoney(input.amountMinor, EUR);
+  const effectiveDateValue = new Date(`${input.effectiveDate}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/u.test(input.effectiveDate) ||
+    Number.isNaN(effectiveDateValue.getTime()) ||
+    effectiveDateValue.toISOString().slice(0, 10) !== input.effectiveDate
+  ) {
+    throw new DataInvariantError(
+      'settings.invalid_effective_date',
+      'Settings effective date must use YYYY-MM-DD.',
+    );
+  }
+  const effectiveAt = canonicalDatabaseInstant(input.effectiveAt);
+  const rows = await tx.query.settingsVersions.findMany({
+    where: eq(settingsVersions.ownerId, ownerId),
+  });
+  const current = rows.find((row) => row.isCurrent);
+  const currentPayload: Readonly<Record<string, unknown>> =
+    current === undefined
+      ? Object.freeze({})
+      : settingsRecord(decodeSourceJson(current.payload), 'settings.invalid_current_payload');
+  if (persistedMaterialityThreshold(currentPayload) === threshold.amountMinor) {
+    return Object.freeze({
+      mutated: false,
+      entityType: 'settings_version',
+      entityId: current?.version ?? ownerId,
+      earliestAffectedAt: null,
+      result: Object.freeze({
+        settingsVersion: current?.version ?? null,
+        materialityThreshold: Object.freeze({
+          amountMinor: threshold.amountMinor.toString(),
+          currency: threshold.currency,
+        }),
+        unchanged: true,
+      }),
+    });
+  }
+  for (const row of rows) {
+    const payload = settingsRecord(
+      decodeSourceJson(row.payload),
+      'settings.invalid_persisted_payload',
+    );
+    if (payload['effectiveFrom'] === input.effectiveDate) {
+      throw new DataConflictError(
+        'settings.effective_date_conflict',
+        'A different settings version is already effective on this Europe/Riga date.',
+      );
+    }
+  }
+  const spending =
+    typeof currentPayload['spendingBaseline'] === 'object' &&
+    currentPayload['spendingBaseline'] !== null &&
+    !Array.isArray(currentPayload['spendingBaseline'])
+      ? (currentPayload['spendingBaseline'] as Readonly<Record<string, unknown>>)
+      : Object.freeze({});
+  const version = generateUuidV7('settings-version');
+  const payload = Object.freeze({
+    ...currentPayload,
+    effectiveFrom: input.effectiveDate,
+    version,
+    spendingBaseline: Object.freeze({
+      ...spending,
+      materialityThreshold: threshold,
+    }),
+  });
+  if (current !== undefined) {
+    await tx
+      .update(settingsVersions)
+      .set({ isCurrent: false })
+      .where(
+        and(eq(settingsVersions.ownerId, ownerId), eq(settingsVersions.version, current.version)),
+      );
+  }
+  await tx.insert(settingsVersions).values({
+    ownerId,
+    version,
+    effectiveFrom: effectiveAt,
+    payload: encodeSourceJson(payload),
+    isCurrent: true,
+  });
+  return Object.freeze({
+    entityType: 'settings_version',
+    entityId: version,
+    earliestAffectedAt: effectiveAt,
+    result: Object.freeze({
+      settingsVersion: version,
+      previousSettingsVersion: current?.version ?? null,
+      effectiveFrom: input.effectiveDate,
+      materialityThreshold: Object.freeze({
+        amountMinor: threshold.amountMinor.toString(),
+        currency: threshold.currency,
+      }),
+      unchanged: false,
+    }),
   });
 }
 

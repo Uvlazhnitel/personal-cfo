@@ -3,12 +3,17 @@ import {
   DataInvariantError,
   appendCashReconciliation,
   appendClassificationCorrection,
+  appendMaterialitySettingsVersion,
   appendManualSinkingAllocation,
   appendReconciliationResolution,
   executeFinancialCommand,
   resolveTransferCandidate,
 } from '@personal-cfo/data';
-import type { EconomicFlowClassification, RecalculationCause } from '@personal-cfo/data';
+import type {
+  EconomicFlowClassification,
+  MaterialitySettingsInput,
+  RecalculationCause,
+} from '@personal-cfo/data';
 import type {
   CashReconciliation,
   CashReconciliationResolution,
@@ -29,6 +34,7 @@ const COMMANDS = [
   'sinking-allocation',
   'cash-reconciliation',
   'cash-reconciliation-resolution',
+  'settings-materiality',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -93,7 +99,42 @@ export function parseClassificationInput(value: unknown): EconomicFlowClassifica
   }
 }
 
-function reviveMoney(value: unknown): unknown {
+export function parseMaterialitySettingsInput(
+  value: unknown,
+  effectiveAt: string,
+  effectiveDate: string,
+): Readonly<MaterialitySettingsInput & { reason: string }> {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
+  const unexpected = Object.keys(value).filter(
+    (key) => !['amountMinor', 'currency', 'reason'].includes(key),
+  );
+  if (unexpected.length > 0) {
+    throw new DataInvariantError(
+      'http.unsupported_fields',
+      `Settings request contains unsupported fields: ${unexpected.sort().join(', ')}.`,
+    );
+  }
+  if (
+    typeof value['amountMinor'] !== 'bigint' ||
+    value['amountMinor'] < 0n ||
+    value['currency'] !== 'EUR'
+  ) {
+    throw new DataInvariantError(
+      'settings.invalid_materiality',
+      'Materiality threshold must be a non-negative EUR amount in minor units.',
+    );
+  }
+  return Object.freeze({
+    amountMinor: value['amountMinor'],
+    currency: value['currency'],
+    effectiveAt,
+    effectiveDate,
+    reason: requiredString(value['reason'], 'reason'),
+  });
+}
+
+export function reviveMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(reviveMoney);
   if (!isRecord(value)) return value;
   const result: Record<string, unknown> = {};
@@ -131,7 +172,21 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'cash_reconciliation';
     case 'cash-reconciliation-resolution':
       return 'cash_reconciliation_resolution';
+    case 'settings-materiality':
+      return 'settings_change';
   }
+}
+
+export function serializeCommandResponse(
+  value: Readonly<{
+    commandId: string;
+    replayed: boolean;
+    mutated: boolean;
+    inputVersion: bigint;
+    result: Readonly<Record<string, unknown>>;
+  }>,
+): Readonly<Record<string, unknown>> {
+  return Object.freeze({ ...value, inputVersion: value.inputVersion.toString() });
 }
 
 export async function POST(
@@ -154,6 +209,7 @@ export async function POST(
       throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
     const clock = new Date();
     const now = clock.toISOString();
+    const effectiveDate = localDateInRiga(clock);
     const boss = await webJobBoss();
     const result = await executeFinancialCommand(
       databaseContext().db,
@@ -164,7 +220,7 @@ export async function POST(
         idempotencyKey,
         request: raw,
         asOf: now,
-        effectiveDate: localDateInRiga(clock),
+        effectiveDate,
         now,
       },
       async (tx, commandId) => {
@@ -213,10 +269,16 @@ export async function POST(
               session.ownerId,
               raw['resolution'] as CashReconciliationResolution,
             );
+          case 'settings-materiality': {
+            const settings = parseMaterialitySettingsInput(raw, now, effectiveDate);
+            return appendMaterialitySettingsVersion(tx, session.ownerId, settings);
+          }
         }
       },
     );
-    return NextResponse.json(result, { status: result.replayed ? 200 : 202 });
+    return NextResponse.json(serializeCommandResponse(result), {
+      status: result.replayed ? 200 : 202,
+    });
   } catch (error) {
     if (error instanceof DataConflictError)
       return NextResponse.json({ error: error.code }, { status: 409 });
