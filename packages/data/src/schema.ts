@@ -1671,6 +1671,67 @@ export const enableBankingCanonicalImports = pgTable(
   ],
 );
 
+export const enableBankingOpeningBalanceEvidence = pgTable(
+  'enable_banking_opening_balance_evidence',
+  {
+    id: uuid('id').primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id),
+    connectionId: uuid('connection_id')
+      .notNull()
+      .references(() => enableBankingConnections.id),
+    providerAccountId: uuid('provider_account_id')
+      .notNull()
+      .references(() => enableBankingProviderAccounts.id),
+    canonicalAccountId: uuid('canonical_account_id')
+      .notNull()
+      .references(() => accounts.id),
+    canonicalTransactionId: uuid('canonical_transaction_id')
+      .notNull()
+      .references(() => financialTransactions.id),
+    commandId: uuid('command_id')
+      .notNull()
+      .references(() => commandRecords.id),
+    openingBalanceMinor: money('opening_balance_minor').notNull(),
+    currency: text('currency').notNull(),
+    statementPeriodFrom: date('statement_period_from').notNull(),
+    statementPeriodThrough: date('statement_period_through').notNull(),
+    balanceBoundaryAt: instant('balance_boundary_at').notNull(),
+    statementSha256: text('statement_sha256').notNull(),
+    observationSetSha256: text('observation_set_sha256').notNull(),
+    bookedObservationCount: integer('booked_observation_count').notNull(),
+    providerBalanceRevisionSha256: text('provider_balance_revision_sha256').notNull(),
+    createdAt: instant('created_at').notNull(),
+  },
+  (table) => [
+    uniqueIndex('enable_banking_opening_balance_owner_account_uq').on(
+      table.ownerId,
+      table.canonicalAccountId,
+    ),
+    uniqueIndex('enable_banking_opening_balance_transaction_uq').on(table.canonicalTransactionId),
+    uniqueIndex('enable_banking_opening_balance_command_uq').on(table.commandId),
+    check('enable_banking_opening_balance_currency_ck', sql`${table.currency} = 'EUR'`),
+    check(
+      'enable_banking_opening_balance_period_ck',
+      sql`${table.statementPeriodFrom} <= ${table.statementPeriodThrough}`,
+    ),
+    check('enable_banking_opening_balance_count_ck', sql`${table.bookedObservationCount} > 0`),
+    check(
+      'enable_banking_opening_balance_statement_hash_ck',
+      sql`${table.statementSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'enable_banking_opening_balance_observation_hash_ck',
+      sql`${table.observationSetSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+    check(
+      'enable_banking_opening_balance_provider_hash_ck',
+      sql`${table.providerBalanceRevisionSha256} ~ '^[0-9a-f]{64}$'`,
+    ),
+  ],
+);
+
 export const enableBankingObservationMatches = pgTable(
   'enable_banking_observation_matches',
   {

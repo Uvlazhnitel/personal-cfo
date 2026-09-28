@@ -12,12 +12,20 @@ export type EnableBankingWebConfiguration = Readonly<{
   redirectUrl: string;
   dataKey: EnableBankingDataKey;
   baseUrl: string;
+  canonicalImportEnabled: boolean;
 }>;
 
 function required(environment: NodeJS.ProcessEnv, name: string): string {
   const value = environment[name]?.trim();
   if (value === undefined || value.length === 0) throw new Error(`${name} is required.`);
   return value;
+}
+
+function booleanFlag(environment: NodeJS.ProcessEnv, name: string): boolean {
+  const value = environment[name]?.trim().toLocaleLowerCase('en') ?? 'false';
+  if (value === 'true') return true;
+  if (value === 'false') return false;
+  throw new Error(`${name} must be true or false.`);
 }
 
 function secureUrl(value: string, label: string): string {
@@ -64,5 +72,6 @@ export async function enableBankingWebConfiguration(
       environment['ENABLE_BANKING_API_BASE_URL']?.trim() || 'https://api.enablebanking.com',
       'ENABLE_BANKING_API_BASE_URL',
     ).replace(/\/$/u, ''),
+    canonicalImportEnabled: booleanFlag(environment, 'ENABLE_BANKING_CANONICAL_IMPORT_ENABLED'),
   });
 }

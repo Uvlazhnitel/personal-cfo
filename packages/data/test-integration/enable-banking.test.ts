@@ -1,7 +1,7 @@
 import { generateKeyPairSync } from 'node:crypto';
 import { resolve } from 'node:path';
 
-import { count, eq } from 'drizzle-orm';
+import { and, count, eq } from 'drizzle-orm';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { executeEnableBankingDiagnosticFetch } from '../../../apps/worker/src/enable-banking/fetch.js';
@@ -11,7 +11,6 @@ import { ENABLE_BANKING_CONTRACT_FIXTURES } from '../../integrations/src/open-ba
 import {
   accounts,
   accountEntries,
-  activateEnableBankingCanonicalImport,
   activateEnableBankingSession,
   beginEnableBankingAuthorization,
   beginEnableBankingDiagnosticFetch,
@@ -22,12 +21,15 @@ import {
   createDatabaseContext,
   createJobBoss,
   enableBankingBalanceReconciliations,
+  enableBankingBalanceObservations,
   enableBankingCanonicalImports,
   enableBankingHistoryCoverage,
   enableBankingRawReceipts,
   enableBankingConnections,
   enableBankingProviderAccounts,
+  enableBankingOpeningBalanceEvidence,
   enableBankingSourceRevisions,
+  enableBankingTransactionObservations,
   encodeSourceJson,
   hashEnableBankingApplicationId,
   investmentContributions,
@@ -35,6 +37,8 @@ import {
   loadMergedEnableBankingCoverage,
   loadEnableBankingActivationReadiness,
   loadCanonicalLedgerBalanceAt,
+  executeEnableBankingInitialActivation,
+  prepareEnableBankingActivation,
   migrateDatabase,
   ownerInputVersions,
   parseEnableBankingDataKey,
@@ -320,6 +324,21 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       }),
       isCurrent: true,
     });
+    const activationBalances = () => {
+      const value = fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances) as {
+        balances: Record<string, unknown>[];
+      };
+      value.balances = value.balances.map((balance) =>
+        balance['balance_type'] === 'ITBD'
+          ? {
+              ...balance,
+              last_change_date_time: '2026-09-25T08:00:00Z',
+              reference_date: '2026-09-25',
+            }
+          : balance,
+      );
+      return value;
+    };
     const bodies = () => [
       {
         status: 'AUTHORIZED',
@@ -331,7 +350,7 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         authorized: '2026-09-25T08:00:03Z',
         closed: null,
       },
-      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances),
+      activationBalances(),
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage),
       fixture(ENABLE_BANKING_CONTRACT_FIXTURES.finalPage),
     ];
@@ -371,28 +390,87 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         where: eq(enableBankingProviderAccounts.ownerId, ownerId),
       });
       expect(verifiedAccount?.transactionIdentityVerifiedAt).not.toBeNull();
-      await activateEnableBankingCanonicalImport(
+      const booked = await context.db.query.enableBankingTransactionObservations.findMany({
+        where: and(
+          eq(enableBankingTransactionObservations.providerStatus, 'booked'),
+          eq(enableBankingTransactionObservations.isCurrent, true),
+        ),
+      });
+      const bookedBalance = await context.db.query.enableBankingBalanceObservations.findFirst({
+        where: eq(enableBankingBalanceObservations.balanceKind, 'interim_booked'),
+        orderBy: (table, { desc }) => [desc(table.sourceAsOf), desc(table.observedAt)],
+      });
+      const evidence = {
+        providerAccountId: providerAccount!.id,
+        openingBalanceMinor:
+          bookedBalance!.amountMinor - booked.reduce((sum, item) => sum + item.amountMinor, 0n),
+        currency: 'EUR' as const,
+        statementPeriodFrom: '2026-09-01',
+        statementPeriodThrough: '2026-09-25',
+        balanceBoundaryAt: '2026-08-31T21:00:00.000Z',
+        statementSha256: 'a'.repeat(64),
+      };
+      const plan = await prepareEnableBankingActivation(
         context.db,
         ownerId,
-        providerAccount!.id,
+        evidence,
         '2026-09-25T09:19:00Z',
       );
-
-      const importQueue = bodies();
-      const imported = await executeEnableBankingSync(context.db, boss, configuration, {
-        canonicalImportEnabled: true,
-        clock: { now: () => new Date('2026-09-25T09:20:00Z') },
-        fetchImplementation: vi.fn(() => Promise.resolve(response(importQueue.shift()))),
+      expect(plan).toMatchObject({
+        ready: true,
+        reconciliation: 'exact',
+        bookedCount: 5,
+        pendingCount: 0,
+        expectedCanonicalTransactions: 6,
       });
-      expect(imported.strategy).toBe('default');
-      expect(imported.completionStatus).toBe('completed');
-      expect(imported.counts.canonicalMutations).toBeGreaterThan(0);
+      const mismatched = await prepareEnableBankingActivation(
+        context.db,
+        ownerId,
+        { ...evidence, openingBalanceMinor: evidence.openingBalanceMinor + 1n },
+        '2026-09-25T09:19:00Z',
+      );
+      expect(mismatched).toMatchObject({
+        ready: false,
+        reconciliation: 'mismatch',
+      });
+      expect(mismatched.blockers).toContain('opening_balance_mismatch');
+      await expect(
+        executeEnableBankingInitialActivation(context.db, boss, {
+          ownerId,
+          evidence,
+          expectedPlanFingerprint: 'f'.repeat(64),
+          confirmation: 'ACTIVATE_CANONICAL_IMPORT',
+          now: '2026-09-25T09:19:30Z',
+        }),
+      ).rejects.toMatchObject({ code: 'enable_banking.activation_plan_stale' });
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toEqual([]);
+      expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toEqual([]);
+      const imported = await executeEnableBankingInitialActivation(context.db, boss, {
+        ownerId,
+        evidence,
+        expectedPlanFingerprint: plan.planFingerprint,
+        confirmation: 'ACTIVATE_CANONICAL_IMPORT',
+        now: '2026-09-25T09:20:00Z',
+      });
+      expect(imported.bookedImported).toBe(5);
       const imports = await context.db.select().from(enableBankingCanonicalImports);
       expect(imports).toHaveLength(5);
-      expect(await context.db.select().from(accountEntries)).toHaveLength(5);
+      expect(await context.db.select().from(accountEntries)).toHaveLength(6);
+      expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toHaveLength(1);
       expect(await context.db.select().from(enableBankingBalanceReconciliations)).toHaveLength(1);
       expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
       expect(await context.db.select().from(recalculationRecords)).toHaveLength(1);
+      const activationReplay = await executeEnableBankingInitialActivation(context.db, boss, {
+        ownerId,
+        evidence,
+        expectedPlanFingerprint: plan.planFingerprint,
+        confirmation: 'ACTIVATE_CANONICAL_IMPORT',
+        now: '2026-09-25T09:20:00Z',
+      });
+      expect(activationReplay.replayed).toBe(true);
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toHaveLength(5);
+      expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toHaveLength(1);
+      expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
 
       const revisionBodies = (status: 'BOOK' | 'CNCL', amount: string) => {
         const values = bodies();

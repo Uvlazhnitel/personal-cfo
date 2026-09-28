@@ -1,5 +1,4 @@
 import {
-  activateEnableBankingCanonicalImport,
   activateEnableBankingSession,
   beginEnableBankingAuthorization,
   beginEnableBankingDisconnect,
@@ -15,6 +14,7 @@ import {
   markEnableBankingAuthorizationStarted,
   markEnableBankingReceiptFailed,
   persistEnableBankingRawReceipt,
+  executeEnableBankingInitialActivation,
 } from '@personal-cfo/data';
 import type {
   ClaimedEnableBankingAuthorization,
@@ -22,6 +22,7 @@ import type {
   EnableBankingDataKey,
   EnableBankingDisconnectLease,
   EnableBankingRunContext,
+  EnableBankingOpeningBalanceEvidenceInput,
 } from '@personal-cfo/data';
 import {
   ENABLE_BANKING_ASPSP,
@@ -30,6 +31,8 @@ import {
   EnableBankingApiError,
   assertEnableBankingSessionBinding,
 } from '@personal-cfo/integrations/open-banking/enable-banking';
+
+import { webJobBoss } from './jobs.js';
 import type { EnableBankingRawResponseSink } from '@personal-cfo/integrations/open-banking/enable-banking';
 
 import { databaseContext } from './database.js';
@@ -264,16 +267,21 @@ export async function bindEnableBankingAccount(
 
 export async function activateEnableBankingAccount(
   ownerId: string,
-  providerAccountId: string,
-): Promise<void> {
+  input: Readonly<{
+    evidence: EnableBankingOpeningBalanceEvidenceInput;
+    expectedPlanFingerprint: string;
+    confirmation: 'ACTIVATE_CANONICAL_IMPORT';
+  }>,
+) {
   const configuration = await enableBankingWebConfiguration();
   if (ownerId !== configuration.ownerId) throw new Error('Enable Banking owner is not configured.');
-  await activateEnableBankingCanonicalImport(
-    databaseContext().db,
+  if (!configuration.canonicalImportEnabled)
+    throw new Error('Enable Banking canonical import is disabled for this deployment.');
+  return executeEnableBankingInitialActivation(databaseContext().db, await webJobBoss(), {
     ownerId,
-    providerAccountId,
-    nowInstant(),
-  );
+    ...input,
+    now: nowInstant(),
+  });
 }
 
 export async function disconnectEnableBanking(ownerId: string): Promise<void> {

@@ -47,6 +47,8 @@ Portfolio Manager configuration is read only by `pnpm portfolio-manager:sync`; n
 
 Enable Banking configuration is loaded by the connection routes and the manual `enable-banking:fetch`/`enable-banking:sync` commands. The application RSA key must be an external absolute-path mode-0600 file; the 32-byte data key encrypts session aliases, page continuations, display hints, and 30-day raw receipts. Diagnostic fetch remains evidence-only. Production sync uses `longest` for a new session, then overlapping `default` scans, and drains every continuation page. Daily dispatch is disabled by default. Canonical import additionally requires `ENABLE_BANKING_CANONICAL_IMPORT_ENABLED=true`, replay-proven transaction identity, closed coverage, verified account identity, and explicit authenticated activation; otherwise sync is evidence-only. See [`docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md`](docs/OPEN_BANKING_PROVIDER_ENABLE_BANKING.md).
 
+`pnpm enable-banking:prepare-activation` creates a mode-0600, local-only activation plan after hashing a protected bank statement and prompting for the exact opening balance. `pnpm enable-banking:review-transfers` provides a local TTY review of unresolved credit-transfer candidates. Neither command activates an account or writes canonical financial facts. Initial activation is one idempotent atomic command containing the verified opening balance and the sealed booked-observation set; the legacy timestamp-only activation path is rejected.
+
 ## Docker Compose
 
 ```bash
