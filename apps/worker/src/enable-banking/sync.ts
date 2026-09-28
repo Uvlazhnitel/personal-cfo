@@ -142,10 +142,36 @@ function rigaDate(value: string): string {
   return `${part('year')}-${part('month')}-${part('day')}`;
 }
 
+function rigaMidnight(value: string): string {
+  const guess = Date.parse(`${value}T00:00:00.000Z`);
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Riga',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(guess));
+  const number = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((candidate) => candidate.type === type)?.value);
+  const represented = Date.UTC(
+    number('year'),
+    number('month') - 1,
+    number('day'),
+    number('hour'),
+    number('minute'),
+    number('second'),
+  );
+  return new Date(guess - (represented - guess)).toISOString();
+}
+
 function balanceSourceAsOf(value: BankBalanceObservation, receivedAt: string): string {
-  if (value.lastChangedAt !== null) return value.lastChangedAt;
-  if (value.referenceDate !== null) return dateAtNoonUtc(value.referenceDate);
-  return receivedAt;
+  const candidate =
+    value.lastChangedAt ??
+    (value.referenceDate === null ? receivedAt : rigaMidnight(value.referenceDate));
+  return new Date(candidate).getTime() <= new Date(receivedAt).getTime() ? candidate : receivedAt;
 }
 
 function hashNullable(value: unknown): string | null {
