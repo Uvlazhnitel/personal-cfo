@@ -19,6 +19,7 @@ import { loadAuthorizedDashboard } from '../src/server/dashboard-access.js';
 const databaseUrl = process.env['DATABASE_URL'];
 const suite = databaseUrl === undefined ? describe.skip : describe;
 const now = '2026-09-26T12:00:00.000Z';
+const clock = { now: () => new Date(now) };
 
 function result(value: unknown, status: 'complete' | 'partial' | 'unavailable' = 'complete') {
   return {
@@ -54,13 +55,13 @@ suite('authenticated dashboard read model', () => {
     ownerId = await createLocalUser(
       context.db,
       { loginName: 'dashboard-owner', password: 'correct horse battery staple' },
-      { now: () => new Date(now) },
+      clock,
     );
     const authenticated = await authenticate(
       context.db,
       'dashboard-owner',
       'correct horse battery staple',
-      { now: () => new Date(now) },
+      clock,
     );
     if (authenticated === null) throw new Error('Dashboard authentication setup failed.');
     session = authenticated;
@@ -169,13 +170,13 @@ suite('authenticated dashboard read model', () => {
       now: () => new Date(now),
     });
     if (other === null) throw new Error('Other owner authentication failed.');
-    const access = await loadAuthorizedDashboard(context.db, other.sessionToken, now);
+    const access = await loadAuthorizedDashboard(context.db, other.sessionToken, now, clock);
     expect(access.status).toBe('authorized');
     if (access.status === 'authorized') expect(access.overview.metrics.netWorth.value).toBeNull();
   });
 
   it('loads exact persisted values and the prior-month comparison', async () => {
-    const access = await loadAuthorizedDashboard(context.db, session.sessionToken, now);
+    const access = await loadAuthorizedDashboard(context.db, session.sessionToken, now, clock);
     expect(access.status).toBe('authorized');
     if (access.status !== 'authorized') return;
     expect(access.overview.metrics.netWorth.value?.amountMinor).toBe(120_000n);
