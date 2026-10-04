@@ -10,6 +10,7 @@ import type { EnableBankingConfiguration } from '../../../apps/worker/src/enable
 import { ENABLE_BANKING_CONTRACT_FIXTURES } from '../../integrations/src/open-banking/enable-banking/index.js';
 import {
   accounts,
+  accountBalanceSnapshots,
   accountEntries,
   activateEnableBankingSession,
   beginEnableBankingAuthorization,
@@ -321,7 +322,7 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         balance['balance_type'] === 'ITBD'
           ? {
               ...balance,
-              last_change_date_time: '2026-09-25T08:00:00Z',
+              last_change_date_time: null,
               reference_date: '2026-09-25',
             }
           : balance,
@@ -389,6 +390,11 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         where: eq(enableBankingBalanceObservations.balanceKind, 'interim_booked'),
         orderBy: (table, { desc }) => [desc(table.sourceAsOf), desc(table.observedAt)],
       });
+      expect(new Date(bookedBalance!.sourceAsOf).toISOString()).toBe('2026-09-24T21:00:00.000Z');
+      await context.db
+        .update(enableBankingBalanceObservations)
+        .set({ sourceAsOf: '2026-09-25T12:00:00Z' })
+        .where(eq(enableBankingBalanceObservations.id, bookedBalance!.id));
       const evidence = {
         providerAccountId: providerAccount!.id,
         openingBalanceMinor:
@@ -466,6 +472,12 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       expect(await context.db.select().from(accountEntries)).toHaveLength(6);
       expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toHaveLength(1);
       expect(await context.db.select().from(enableBankingBalanceReconciliations)).toHaveLength(1);
+      const [snapshot] = await context.db.select().from(accountBalanceSnapshots);
+      expect(new Date(snapshot!.sourceAsOf).getTime()).toBeLessThanOrEqual(
+        new Date(snapshot!.receivedAt).getTime(),
+      );
+      const [reconciliation] = await context.db.select().from(enableBankingBalanceReconciliations);
+      expect(reconciliation?.differenceMinor).toBe(0n);
       expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
       expect(await context.db.select().from(recalculationRecords)).toHaveLength(1);
       const activationReplay = await executeEnableBankingInitialActivation(context.db, boss, {
@@ -512,7 +524,7 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         clock: { now: () => new Date('2026-09-25T09:27:00Z') },
         fetchImplementation: vi.fn(() => Promise.resolve(response(correctedQueue.shift()))),
       });
-      expect(corrected.counts.canonicalMutations).toBe(2);
+      expect(corrected.counts.canonicalMutations).toBe(3);
       expect(
         await loadCanonicalLedgerBalanceAt(context.db, ownerId, accountId, '2026-09-25T23:59:59Z'),
       ).toBe(balanceBeforeCorrection + 10_000n);

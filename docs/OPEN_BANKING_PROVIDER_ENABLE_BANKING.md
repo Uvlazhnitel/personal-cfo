@@ -129,6 +129,8 @@ The provider adapter does not auto-categorize any of these observations.
 
 The latest booked balance is compared with canonical booked account entries through the same provider cutoff. Results are `reconciled`, `provider_stale`, `incomplete_history`, `unresolved_pending`, `material_mismatch`, or `unavailable`. The effective persisted materiality threshold is used; no adjustment is synthesized to force agreement. Material mismatch blocks authority-dependent recommendations.
 
+Date-only balance cutoffs are normalized to the start of that Europe/Riga calendar day and never later than the receipt instant. Legacy observations whose derived cutoff is later than receipt are conservatively bounded by receipt during activation. Initial canonical activation additionally requires an exact zero-minor-unit reconciliation; the materiality threshold never waives that activation gate.
+
 Only an EUR Swedbank account can be activated in V1. The exact booked EUR account movement is canonical money. Merchant/instructed currency and provider exchange fields remain provenance and never replace that movement. Non-EUR accounts may be discovered but cannot be activated or enter EUR metrics until the general FX provider decision is resolved.
 
 ## Security, disconnect, and purge
