@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
   reviveMoney,
   serializeCommandResponse,
@@ -49,5 +50,25 @@ describe('materiality settings command request', () => {
     });
     expect(response).toMatchObject({ inputVersion: '9007199254740993' });
     expect(() => JSON.stringify(response)).not.toThrow();
+  });
+});
+
+describe('evaluation profile bootstrap request', () => {
+  it('accepts only an explicit reason', () => {
+    expect(
+      parseEvaluationProfileBootstrapInput({
+        reason: 'Owner approved a conservative production engine profile.',
+      }),
+    ).toEqual({ reason: 'Owner approved a conservative production engine profile.' });
+  });
+
+  it.each([
+    [{ reason: '' }, 'http.invalid_request'],
+    [{ reason: 'approved', ownerId: 'forbidden' }, 'http.unsupported_fields'],
+    [{ reason: 'approved', current: {} }, 'http.unsupported_fields'],
+  ])('rejects missing or caller-controlled profile state', (request, code) => {
+    expect(() => parseEvaluationProfileBootstrapInput(request)).toThrow(
+      expect.objectContaining({ code }),
+    );
   });
 });

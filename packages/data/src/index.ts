@@ -5,6 +5,7 @@ export * from './dashboard.js';
 export * from './debug-overview.js';
 export * from './errors.js';
 export * from './engine-runs.js';
+export * from './evaluation-bootstrap.js';
 export * from './enable-banking.js';
 export * from './enable-banking-sync.js';
 export * from './financial-facts.js';
