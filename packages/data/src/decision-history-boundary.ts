@@ -153,6 +153,10 @@ export async function setDecisionHistoryBoundary(
     );
   }
   const period = Object.freeze({ startInclusive, endExclusive: asOf });
+  const reservationPeriod = Object.freeze({
+    startInclusive,
+    endExclusive: canonicalDatabaseInstant(new Date(new Date(asOf).getTime() + 1).toISOString()),
+  });
   const boundary = Object.freeze({
     startDate: input.startDate,
     startInclusive,
@@ -180,7 +184,7 @@ export async function setDecisionHistoryBoundary(
       payload: encodeSourceJson({
         ...contextPayload,
         historyCoverage: period,
-        reservationCoverage: period,
+        reservationCoverage: reservationPeriod,
       }),
     })
     .where(

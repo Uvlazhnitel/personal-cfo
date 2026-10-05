@@ -207,11 +207,15 @@ function currentAtDecisionBoundary(
       'Decision history start must be earlier than the run boundary.',
     );
   }
-  const period = Object.freeze({ startInclusive, endExclusive });
+  const historyCoverage = Object.freeze({ startInclusive, endExclusive });
+  const reservationCoverage = Object.freeze({
+    startInclusive,
+    endExclusive: parseInstant(new Date(new Date(endExclusive).getTime() + 1).toISOString()),
+  });
   return Object.freeze({
     ...current,
-    historyCoverage: period,
-    reservationCoverage: period,
+    historyCoverage,
+    reservationCoverage,
   });
 }
 

@@ -161,7 +161,10 @@ suite('owner-confirmed decision history boundary', () => {
     expect(decodedContext['quality']).toEqual(qualityBefore);
     expect(decodedContext).toMatchObject({
       historyCoverage: { startInclusive: '2026-06-30T21:00:00Z' },
-      reservationCoverage: { startInclusive: '2026-06-30T21:00:00Z' },
+      reservationCoverage: {
+        startInclusive: '2026-06-30T21:00:00Z',
+        endExclusive: '2026-10-05T18:00:00.001Z',
+      },
     });
     expect(
       await context.db
@@ -184,6 +187,9 @@ suite('owner-confirmed decision history boundary', () => {
     expect(assembled.input.canonical.ambiguities[0]?.effectiveAt).toBe('2026-06-30T21:00:00Z');
     expect(assembled.input.ccrPeriod).toEqual(assembled.input.current.historyCoverage);
     expect(assembled.input.ccrPeriod.startInclusive).toBe('2026-06-30T21:00:00Z');
+    expect(assembled.input.current.reservationCoverage.endExclusive).toBe(
+      '2026-10-05T18:00:00.001Z',
+    );
 
     const replay = await runBoundary(ownerId, 'decision-history-boundary-001');
     expect(replay).toMatchObject({
