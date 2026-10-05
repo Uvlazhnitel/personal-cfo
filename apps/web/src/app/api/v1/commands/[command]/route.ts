@@ -6,6 +6,7 @@ import {
   appendMaterialitySettingsVersion,
   appendManualSinkingAllocation,
   appendReconciliationResolution,
+  bootstrapCashAccount,
   bootstrapConservativeEvaluationProfile,
   executeFinancialCommand,
   resolveTransferCandidate,
@@ -37,6 +38,7 @@ const COMMANDS = [
   'cash-reconciliation-resolution',
   'settings-materiality',
   'engine-profile-bootstrap',
+  'cash-account-bootstrap',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -149,12 +151,45 @@ export function parseEvaluationProfileBootstrapInput(value: unknown): Readonly<{
   return Object.freeze({ reason: requiredString(value['reason'], 'reason') });
 }
 
+export function parseCashAccountBootstrapInput(value: unknown): Readonly<{
+  openingBalanceMinor: bigint;
+  effectiveAt: string;
+  reason: string;
+}> {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
+  const unexpected = Object.keys(value).filter(
+    (key) => !['openingBalanceMinor', 'effectiveAt', 'reason'].includes(key),
+  );
+  if (unexpected.length > 0) {
+    throw new DataInvariantError(
+      'http.unsupported_fields',
+      `Cash Account bootstrap contains unsupported fields: ${unexpected.sort().join(', ')}.`,
+    );
+  }
+  if (typeof value['openingBalanceMinor'] !== 'bigint' || value['openingBalanceMinor'] < 0n) {
+    throw new DataInvariantError(
+      'cash_account.invalid_opening_balance',
+      'Cash Account opening balance must be a non-negative EUR amount in minor units.',
+    );
+  }
+  return Object.freeze({
+    openingBalanceMinor: value['openingBalanceMinor'],
+    effectiveAt: requiredString(value['effectiveAt'], 'effectiveAt'),
+    reason: requiredString(value['reason'], 'reason'),
+  });
+}
+
 export function reviveMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(reviveMoney);
   if (!isRecord(value)) return value;
   const result: Record<string, unknown> = {};
   for (const [key, item] of Object.entries(value)) {
-    if (key === 'amountMinor' && typeof item === 'string' && /^0|-?[1-9][0-9]*$/u.test(item)) {
+    if (
+      (key === 'amountMinor' || key === 'openingBalanceMinor') &&
+      typeof item === 'string' &&
+      /^0|-?[1-9][0-9]*$/u.test(item)
+    ) {
       result[key] = BigInt(item);
     } else {
       result[key] = reviveMoney(item);
@@ -191,6 +226,8 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'settings_change';
     case 'engine-profile-bootstrap':
       return 'engine_profile_bootstrap';
+    case 'cash-account-bootstrap':
+      return 'cash_account_bootstrap';
   }
 }
 
@@ -296,6 +333,13 @@ export async function POST(
               ...bootstrap,
               asOf: now,
               effectiveDate,
+            });
+          }
+          case 'cash-account-bootstrap': {
+            const bootstrap = parseCashAccountBootstrapInput(raw);
+            return bootstrapCashAccount(tx, session.ownerId, {
+              ...bootstrap,
+              asOf: now,
             });
           }
         }

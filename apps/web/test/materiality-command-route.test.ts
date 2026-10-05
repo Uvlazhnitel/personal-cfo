@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseCashAccountBootstrapInput,
   parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
   reviveMoney,
@@ -68,6 +69,54 @@ describe('evaluation profile bootstrap request', () => {
     [{ reason: 'approved', current: {} }, 'http.unsupported_fields'],
   ])('rejects missing or caller-controlled profile state', (request, code) => {
     expect(() => parseEvaluationProfileBootstrapInput(request)).toThrow(
+      expect.objectContaining({ code }),
+    );
+  });
+});
+
+describe('cash account bootstrap request', () => {
+  it('accepts only an explicit balance, instant, and reason', () => {
+    const request = reviveMoney({
+      openingBalanceMinor: '12500',
+      effectiveAt: '2026-07-01T00:00:00Z',
+      reason: 'Owner confirmed the cash cutover balance.',
+    });
+    expect(parseCashAccountBootstrapInput(request)).toEqual({
+      openingBalanceMinor: 12_500n,
+      effectiveAt: '2026-07-01T00:00:00Z',
+      reason: 'Owner confirmed the cash cutover balance.',
+    });
+  });
+
+  it.each([
+    [
+      { openingBalanceMinor: -1n, effectiveAt: '2026-07-01T00:00:00Z', reason: 'invalid' },
+      'cash_account.invalid_opening_balance',
+    ],
+    [
+      { openingBalanceMinor: 0n, effectiveAt: '2026-07-01T00:00:00Z', reason: '' },
+      'http.invalid_request',
+    ],
+    [
+      {
+        openingBalanceMinor: 0n,
+        effectiveAt: '2026-07-01T00:00:00Z',
+        reason: 'approved',
+        ownerId: 'forbidden',
+      },
+      'http.unsupported_fields',
+    ],
+    [
+      {
+        openingBalanceMinor: 0n,
+        effectiveAt: '2026-07-01T00:00:00Z',
+        reason: 'approved',
+        currency: 'EUR',
+      },
+      'http.unsupported_fields',
+    ],
+  ])('rejects invalid or caller-controlled state', (request, code) => {
+    expect(() => parseCashAccountBootstrapInput(request)).toThrow(
       expect.objectContaining({ code }),
     );
   });

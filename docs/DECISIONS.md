@@ -468,13 +468,23 @@ Canonical import requires the deployment switch, verified stable account identit
 
 **Consequences:** Bootstrap does not create or modify canonical transactions, economic flows, classifications, balances, valuations, contributions, or provider evidence. Resulting metrics may remain partial or unavailable until separate authenticated commands establish their source facts. Profile replacement and arbitrary client-provided profile payloads remain unsupported; future planning-data workflows require their own versioned commands.
 
+## ADR-041 — Owner-Confirmed Cash Account Cutover
+
+**Status:** Accepted — 2026-10-05
+
+**Decision:** The first non-brokerage EUR Cash Account is created only through a session-authenticated, owner-scoped, idempotent financial command. The owner supplies an exact non-negative opening balance, its UTC effective instant, and a reason; zero must be explicit and is never inferred. The command fixes the account to `cash`, EUR, `ledger`, included in Net Worth, and no brokerage link. It creates one booked `opening_balance` transaction in the same transaction as audit, input-version increment, recalculation record, and pg-boss enqueue. An existing Cash Account blocks initialization under a different command key.
+
+**Reasoning:** Telegram and cash-transfer resolution require exactly one ledger-authoritative Cash Account, while production currently has none. An explicit opening fact establishes the measurement boundary without treating cash already held as earned income or capital creation. Server-generated account, transaction, and entry identities prevent caller-controlled ownership or canonical structure.
+
+**Consequences:** The bootstrap neither changes the bank ledger nor creates an economic flow or classification. Historical cash activity before the owner-confirmed cutover remains unavailable rather than fabricated. Other manual account and liability opening-balance policies remain unresolved.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
 | --- | --- | --- | --- |
 | General non-EUR FX provider and missing-rate policy | Stage 8 is safely EUR-only under ADR-037. A future provider still needs licensing, weekend-rate, correction, and portfolio-attribution decisions before any non-EUR account becomes authoritative. | Product/engineering | Before non-EUR ingestion |
 | Numerical policy calibration | Reserve months, materiality, Cash Drag threshold, recommendation increments, and forecast assumptions remain provisional configurable defaults needing synthetic/user validation. Pay-cycle and Step-Up algorithms are accepted. | Product | During Stages 3–5 |
-| Liabilities and opening balances | V1 may omit liabilities, but Net Worth start-date and historical reconciliation need a chosen cutover policy. | Product | Before Stage 2 completion |
+| Liabilities and non-cash opening balances | V1 may omit liabilities, but their Net Worth start-date and historical reconciliation still need a chosen cutover policy. Cash Account cutover is resolved by ADR-041. | Product | Before adding liabilities or other manual accounts |
 | AI retention and region | Provider, model, zero-retention availability, data region, and user consent are not selected. | Product/security | Before Stage 11 |
 | Backup objectives | Off-host destination, encryption-key custody, retention, RPO, and RTO depend on the target server and operator. | Operator | Before production data |
 

@@ -30,6 +30,7 @@ export const RECALCULATION_CAUSES = [
   'bank_transfer_confirmation',
   'settings_change',
   'engine_profile_bootstrap',
+  'cash_account_bootstrap',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];
