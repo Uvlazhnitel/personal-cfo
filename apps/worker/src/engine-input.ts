@@ -13,6 +13,7 @@ import {
   parseInstant,
   parseLocalDate,
 } from '@personal-cfo/domain';
+import type { Instant } from '@personal-cfo/domain';
 import {
   DEFAULT_FORECAST_SETTINGS,
   DEFAULT_INVESTMENT_STEP_SETTINGS,
@@ -182,6 +183,66 @@ function applyBankCoverage(
   });
 }
 
+function decisionHistoryStart(profile: Readonly<Record<string, unknown>>): Instant | null {
+  const value = profile['decisionHistoryBoundary'];
+  if (value === undefined) return null;
+  const boundary = record(value);
+  if (boundary['source'] !== 'owner_confirmed' || typeof boundary['startInclusive'] !== 'string') {
+    throw new DataInvariantError(
+      'assembly.invalid_decision_history_boundary',
+      'The persisted decision history boundary is invalid.',
+    );
+  }
+  return parseInstant(boundary['startInclusive']);
+}
+
+function currentAtDecisionBoundary(
+  current: FinancialEngineInput['current'],
+  startInclusive: Instant,
+  endExclusive: Instant,
+): FinancialEngineInput['current'] {
+  if (startInclusive >= endExclusive) {
+    throw new DataInvariantError(
+      'assembly.invalid_decision_history_period',
+      'Decision history start must be earlier than the run boundary.',
+    );
+  }
+  const period = Object.freeze({ startInclusive, endExclusive });
+  return Object.freeze({
+    ...current,
+    historyCoverage: period,
+    reservationCoverage: period,
+  });
+}
+
+function canonicalAtDecisionBoundary(
+  canonical: FinancialEngineInput['canonical'],
+  startInclusive: Instant,
+): FinancialEngineInput['canonical'] {
+  const economicFlows = canonical.economicFlows.filter(
+    (item) => item.effectiveAt >= startInclusive,
+  );
+  const economicFlowIds = new Set(economicFlows.map((item) => item.id));
+  const transactionInstants = new Map(
+    canonical.transactions.map((item) => [item.id, item.effectiveAt]),
+  );
+  return Object.freeze({
+    ...canonical,
+    economicFlows: Object.freeze(economicFlows),
+    ambiguities: Object.freeze(
+      canonical.ambiguities.filter((item) => item.effectiveAt >= startInclusive),
+    ),
+    spendingObservations: Object.freeze(
+      canonical.spendingObservations.filter((item) => economicFlowIds.has(item.economicFlowId)),
+    ),
+    primarySalaryTriggers: Object.freeze(
+      canonical.primarySalaryTriggers.filter(
+        (item) => (transactionInstants.get(item.transactionId) ?? '') >= startInclusive,
+      ),
+    ),
+  });
+}
+
 export async function assembleFinancialEngineInput(
   db: Database,
   request: FinancialEngineAssemblyRequest,
@@ -205,7 +266,7 @@ export async function assembleFinancialEngineInput(
           loadedInputVersion: parts.inputVersion,
         });
       }
-      const canonical = await loadCanonicalFacts(tx, request.ownerId);
+      const loadedCanonical = await loadCanonicalFacts(tx, request.ownerId);
       const bankReconciliation = await loadLatestEnableBankingReconciliation(
         tx,
         request.ownerId,
@@ -215,6 +276,7 @@ export async function assembleFinancialEngineInput(
       const settingsHistory = Object.freeze(parts.settingsHistory.map(hydrateV1Settings));
       const settingsVersion = effectiveSettingsVersion(settingsHistory, effectiveDate);
       const profile = parts.profile;
+      const boundaryStart = decisionHistoryStart(profile);
       const sourceWatermark = profile['sourceInputWatermark'];
       const inputWatermark =
         request.cause === 'synthetic_import' &&
@@ -222,10 +284,15 @@ export async function assembleFinancialEngineInput(
         typeof sourceWatermark === 'string'
           ? sourceWatermark
           : `owner:${request.ownerId}:v${request.expectedInputVersion.toString()}`;
-      const persistedCurrent = applyBankCoverage(
-        parts.current as FinancialEngineInput['current'],
-        bankCoverage.at(-1),
-      );
+      const boundaryCurrent =
+        boundaryStart === null
+          ? (parts.current as FinancialEngineInput['current'])
+          : currentAtDecisionBoundary(
+              parts.current as FinancialEngineInput['current'],
+              boundaryStart,
+              asOf,
+            );
+      const persistedCurrent = applyBankCoverage(boundaryCurrent, bankCoverage.at(-1));
       const current =
         bankReconciliation === null || bankReconciliation.status === 'reconciled'
           ? persistedCurrent
@@ -237,6 +304,12 @@ export async function assembleFinancialEngineInput(
                   bankReconciliation.status === 'unavailable' ? 'unavailable' : 'partial',
               }),
             });
+      const canonical =
+        boundaryStart === null
+          ? loadedCanonical
+          : canonicalAtDecisionBoundary(loadedCanonical, boundaryStart);
+      const ccrPeriod =
+        boundaryStart === null ? profile['ccrPeriod'] : persistedCurrent.historyCoverage;
       const input = Object.freeze({
         run: Object.freeze({
           asOf,
@@ -249,7 +322,7 @@ export async function assembleFinancialEngineInput(
         canonical,
         current,
         historicalCheckpoints: parts.historicalCheckpoints,
-        ccrPeriod: profile['ccrPeriod'],
+        ccrPeriod,
         rollingCcrPeriods: profile['rollingCcrPeriods'],
         forwardProjection: profile['forwardProjection'],
         recurringPlanId: profile['recurringPlanId'],

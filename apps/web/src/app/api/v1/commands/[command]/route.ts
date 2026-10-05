@@ -10,6 +10,7 @@ import {
   bootstrapConservativeEvaluationProfile,
   executeFinancialCommand,
   resolveTransferCandidate,
+  setDecisionHistoryBoundary,
 } from '@personal-cfo/data';
 import type {
   EconomicFlowClassification,
@@ -39,6 +40,7 @@ const COMMANDS = [
   'settings-materiality',
   'engine-profile-bootstrap',
   'cash-account-bootstrap',
+  'decision-history-boundary',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -180,6 +182,25 @@ export function parseCashAccountBootstrapInput(value: unknown): Readonly<{
   });
 }
 
+export function parseDecisionHistoryBoundaryInput(value: unknown): Readonly<{
+  startDate: string;
+  reason: string;
+}> {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
+  const unexpected = Object.keys(value).filter((key) => !['startDate', 'reason'].includes(key));
+  if (unexpected.length > 0) {
+    throw new DataInvariantError(
+      'http.unsupported_fields',
+      `Decision history boundary contains unsupported fields: ${unexpected.sort().join(', ')}.`,
+    );
+  }
+  return Object.freeze({
+    startDate: requiredString(value['startDate'], 'startDate'),
+    reason: requiredString(value['reason'], 'reason'),
+  });
+}
+
 export function reviveMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(reviveMoney);
   if (!isRecord(value)) return value;
@@ -228,6 +249,8 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'engine_profile_bootstrap';
     case 'cash-account-bootstrap':
       return 'cash_account_bootstrap';
+    case 'decision-history-boundary':
+      return 'decision_history_boundary';
   }
 }
 
@@ -340,6 +363,14 @@ export async function POST(
             return bootstrapCashAccount(tx, session.ownerId, {
               ...bootstrap,
               asOf: now,
+            });
+          }
+          case 'decision-history-boundary': {
+            const boundary = parseDecisionHistoryBoundaryInput(raw);
+            return setDecisionHistoryBoundary(tx, session.ownerId, {
+              ...boundary,
+              asOf: now,
+              effectiveDate,
             });
           }
         }
