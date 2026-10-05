@@ -6,6 +6,7 @@ import {
   appendMaterialitySettingsVersion,
   appendManualSinkingAllocation,
   appendReconciliationResolution,
+  bootstrapConservativeEvaluationProfile,
   executeFinancialCommand,
   resolveTransferCandidate,
 } from '@personal-cfo/data';
@@ -35,6 +36,7 @@ const COMMANDS = [
   'cash-reconciliation',
   'cash-reconciliation-resolution',
   'settings-materiality',
+  'engine-profile-bootstrap',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -134,6 +136,19 @@ export function parseMaterialitySettingsInput(
   });
 }
 
+export function parseEvaluationProfileBootstrapInput(value: unknown): Readonly<{ reason: string }> {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
+  const unexpected = Object.keys(value).filter((key) => key !== 'reason');
+  if (unexpected.length > 0) {
+    throw new DataInvariantError(
+      'http.unsupported_fields',
+      `Engine profile bootstrap contains unsupported fields: ${unexpected.sort().join(', ')}.`,
+    );
+  }
+  return Object.freeze({ reason: requiredString(value['reason'], 'reason') });
+}
+
 export function reviveMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(reviveMoney);
   if (!isRecord(value)) return value;
@@ -174,6 +189,8 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'cash_reconciliation_resolution';
     case 'settings-materiality':
       return 'settings_change';
+    case 'engine-profile-bootstrap':
+      return 'engine_profile_bootstrap';
   }
 }
 
@@ -272,6 +289,14 @@ export async function POST(
           case 'settings-materiality': {
             const settings = parseMaterialitySettingsInput(raw, now, effectiveDate);
             return appendMaterialitySettingsVersion(tx, session.ownerId, settings);
+          }
+          case 'engine-profile-bootstrap': {
+            const bootstrap = parseEvaluationProfileBootstrapInput(raw);
+            return bootstrapConservativeEvaluationProfile(tx, session.ownerId, {
+              ...bootstrap,
+              asOf: now,
+              effectiveDate,
+            });
           }
         }
       },

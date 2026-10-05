@@ -458,6 +458,16 @@ Canonical import requires the deployment switch, verified stable account identit
 
 **Consequences:** Deterministic acceptance advances Stage 8 to `READY_FOR_LIVE_BANK_VALIDATION`. Production canonical import remains off by default. Transfer review may resolve existing ambiguities, but portfolio principal still requires the Stage 7 confirmed canonical-transfer constructor. Account-scoped purge and live Swedbank acceptance remain explicit blockers before general availability; no scheduler setting can bypass them.
 
+## ADR-040 — Conservative One-Time Production Engine Profile Bootstrap
+
+**Status:** Accepted — 2026-10-05
+
+**Decision:** A session-authenticated financial command may initialize the missing evaluation profile and current planning context exactly once for an owner who already has a canonical account, canonical transaction, current settings version, and input-version row. The request contains only an operator reason; owner identity, time, settings version, canonical history boundary, engine version, watermark, and the profile itself are server-derived. All unverified planning inputs and forward coverage start as `unavailable`, recurring and forecast inputs are empty, and recurring contribution is zero. The same transaction writes the profile/context, audit, next input version, recalculation record, and pg-boss job. Exact idempotent replay creates no state; any second initialization under a different key fails closed.
+
+**Reasoning:** Production bank activation can establish exact canonical cash authority without supplying the explicit Stage 2G planning context required by the financial engine. Reusing the development-only synthetic importer would introduce fabricated facts and is forbidden. A conservative one-time bootstrap makes the existing worker operable without claiming salary, spending, obligation, reservation, forecast, or investment completeness that has not been established.
+
+**Consequences:** Bootstrap does not create or modify canonical transactions, economic flows, classifications, balances, valuations, contributions, or provider evidence. Resulting metrics may remain partial or unavailable until separate authenticated commands establish their source facts. Profile replacement and arbitrary client-provided profile payloads remain unsupported; future planning-data workflows require their own versioned commands.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
