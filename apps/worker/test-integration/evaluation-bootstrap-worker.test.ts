@@ -11,6 +11,7 @@ import {
   createDatabaseContext,
   createJobBoss,
   ensureSyntheticOwner,
+  encodeSourceJson,
   engineRuns,
   evaluationProfiles,
   executeFinancialCommand,
@@ -19,8 +20,10 @@ import {
   planningContexts,
   recalculationRecords,
   saveFinancialEngineSource,
+  settingsVersions,
 } from '../../../packages/data/src/index.js';
 import type { DatabaseContext, RecalculationJob } from '../../../packages/data/src/index.js';
+import { assembleFinancialEngineInput } from '../src/engine-input.js';
 import { processRecalculationJob } from '../src/job-handlers.js';
 
 const databaseUrl = process.env['DATABASE_URL'];
@@ -61,6 +64,18 @@ suite('evaluation profile bootstrap worker publication', () => {
       scenario.run.asOf,
     );
     expect(imported.inputVersion).toBe(1n);
+    await context.db
+      .update(settingsVersions)
+      .set({
+        payload: encodeSourceJson({
+          effectiveFrom: scenario.settingsHistory[0]!.effectiveFrom,
+          version: scenario.settingsHistory[0]!.version,
+          spendingBaseline: {
+            materialityThreshold: { amountMinor: 10_000n, currency: 'EUR' },
+          },
+        }),
+      })
+      .where(eq(settingsVersions.ownerId, ownerId));
     await context.db.delete(planningContexts).where(eq(planningContexts.ownerId, ownerId));
     await context.db.delete(evaluationProfiles).where(eq(evaluationProfiles.ownerId, ownerId));
 
@@ -85,6 +100,25 @@ suite('evaluation profile bootstrap worker publication', () => {
         }),
     );
     expect(command).toMatchObject({ inputVersion: 2n, replayed: false, mutated: true });
+
+    const assembled = await assembleFinancialEngineInput(context.db, {
+      ownerId,
+      expectedInputVersion: 2n,
+      asOf: now,
+      effectiveDate: '2026-10-05',
+      cause: 'engine_profile_bootstrap',
+    });
+    expect(assembled.status).toBe('ready');
+    if (assembled.status !== 'ready') throw new Error('Bootstrap assembly was superseded.');
+    expect(assembled.input.settingsHistory[0]).toMatchObject({
+      spendingBaseline: {
+        baselineWindowMonths: 6,
+        materialityThreshold: { amountMinor: 10_000n, currency: 'EUR' },
+      },
+      liquidity: { unknownIncomeHorizonDays: 31 },
+      safeToInvest: { recommendationIncrement: { amountMinor: 1_000n, currency: 'EUR' } },
+      cashDrag: { windowDays: 60 },
+    });
 
     await boss.work<RecalculationJob>(JOB_QUEUES.recalculate, { batchSize: 1 }, async (jobs) => {
       for (const job of jobs) await processRecalculationJob(context.db, boss, job);
