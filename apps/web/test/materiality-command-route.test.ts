@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseCashAccountBootstrapInput,
+  parseDecisionHistoryBoundaryInput,
   parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
   reviveMoney,
@@ -117,6 +118,37 @@ describe('cash account bootstrap request', () => {
     ],
   ])('rejects invalid or caller-controlled state', (request, code) => {
     expect(() => parseCashAccountBootstrapInput(request)).toThrow(
+      expect.objectContaining({ code }),
+    );
+  });
+});
+
+describe('decision history boundary request', () => {
+  it('accepts only an owner-confirmed local start date and reason', () => {
+    expect(
+      parseDecisionHistoryBoundaryInput({
+        startDate: '2026-07-01',
+        reason: 'Owner approved reliable decision history from July.',
+      }),
+    ).toEqual({
+      startDate: '2026-07-01',
+      reason: 'Owner approved reliable decision history from July.',
+    });
+  });
+
+  it.each([
+    [{ startDate: '', reason: 'approved' }, 'http.invalid_request'],
+    [{ startDate: '2026-07-01', reason: '' }, 'http.invalid_request'],
+    [
+      { startDate: '2026-07-01', reason: 'approved', ownerId: 'forbidden' },
+      'http.unsupported_fields',
+    ],
+    [
+      { startDate: '2026-07-01', reason: 'approved', endExclusive: 'caller-controlled' },
+      'http.unsupported_fields',
+    ],
+  ])('rejects missing or caller-controlled boundary state', (request, code) => {
+    expect(() => parseDecisionHistoryBoundaryInput(request)).toThrow(
       expect.objectContaining({ code }),
     );
   });

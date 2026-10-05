@@ -31,6 +31,7 @@ export const RECALCULATION_CAUSES = [
   'settings_change',
   'engine_profile_bootstrap',
   'cash_account_bootstrap',
+  'decision_history_boundary',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];

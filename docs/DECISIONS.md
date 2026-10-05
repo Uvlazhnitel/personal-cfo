@@ -478,6 +478,18 @@ Canonical import requires the deployment switch, verified stable account identit
 
 **Consequences:** The bootstrap neither changes the bank ledger nor creates an economic flow or classification. Historical cash activity before the owner-confirmed cutover remains unavailable rather than fabricated. Other manual account and liability opening-balance policies remain unresolved.
 
+## ADR-042 — Owner-Confirmed Decision History Boundary
+
+**Status:** Accepted — 2026-10-06
+
+**Decision:** A session-authenticated, owner-scoped, idempotent financial command establishes the first reliable decision-history date from the owner's local calendar. The server derives the owner, time zone, exact UTC start instant, current run boundary, and completeness period. The accepted boundary is recorded once in the existing evaluation profile and planning context, increments the input version, writes audit, and enqueues recalculation atomically. Exact replay is inert; a different-key replacement fails closed.
+
+The canonical ledger, account balances, and provider evidence remain complete and unchanged. For engine runs after the boundary is set, ledger transactions continue to determine balances and Net Worth across all history, while economic-flow classification, salary-trigger, spending-observation, and unresolved-ambiguity inputs used by decision metrics begin at the boundary. The current CCR period follows the proven bank-history end on each run. Conservative planning completeness fields remain unchanged.
+
+**Reasoning:** Reconciliation requires the full bank ledger, but decision metrics must not be blocked or distorted by unresolved transactions before the owner-approved reliable-history period. Deleting or rewriting old transactions would break canonical authority. Treating old ambiguity as current decision uncertainty would falsely couple a new reliable period to data the owner has explicitly excluded.
+
+**Consequences:** The boundary creates no transaction, economic flow, classification, balance, valuation, contribution, schedule, or planning fact. Post-boundary ambiguity remains authoritative and can still block metrics. Salary and transfers require explicit later commands; the boundary cannot make unavailable liquidity, obligation, reservation, or pay-schedule inputs complete.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |
