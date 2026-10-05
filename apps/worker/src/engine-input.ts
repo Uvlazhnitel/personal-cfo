@@ -6,7 +6,17 @@ import {
   loadMergedEnableBankingCoverage,
 } from '@personal-cfo/data';
 import type { Database, RecalculationCause } from '@personal-cfo/data';
-import { parseInstant, parseLocalDate } from '@personal-cfo/domain';
+import {
+  EUR,
+  createExactFraction,
+  createMoney,
+  parseInstant,
+  parseLocalDate,
+} from '@personal-cfo/domain';
+import {
+  DEFAULT_FORECAST_SETTINGS,
+  DEFAULT_INVESTMENT_STEP_SETTINGS,
+} from '@personal-cfo/financial-engine';
 import type { FinancialEngineInput, FinancialEngineSettings } from '@personal-cfo/financial-engine';
 
 export type FinancialEngineAssemblyRequest = Readonly<{
@@ -36,6 +46,80 @@ const RIGA_DATE = new Intl.DateTimeFormat('en-CA', {
   month: '2-digit',
   day: '2-digit',
 });
+
+const V1_POLICY_DEFAULTS = Object.freeze({
+  spendingBaseline: Object.freeze({
+    baselineWindowMonths: 6,
+    minimumCompleteMonths: 3,
+    maximumBaselineLookbackMonths: 36,
+    variabilityPercentile: createExactFraction(4n, 5n),
+    seasonalityMinimumMonths: 24,
+    seasonalityCap: createExactFraction(1n, 5n),
+    fallbackNormalBaseline: null,
+    fallbackEssentialBaseline: null,
+  }),
+  liquidity: Object.freeze({
+    minimumReserveMonths: createExactFraction(1n, 1n),
+    comfortReserveMonths: createExactFraction(3n, 1n),
+    unknownIncomeHorizonDays: 31,
+    obligationHorizonDays: 90,
+  }),
+  safeToInvest: Object.freeze({ recommendationIncrement: createMoney(1_000n, EUR) }),
+  cashDrag: Object.freeze({
+    windowDays: 60,
+    minimumCompleteDays: 54,
+    minimumPositiveExcessDays: 45,
+    absoluteExcessThreshold: createMoney(25_000n, EUR),
+    relativeComfortThreshold: createExactFraction(1n, 10n),
+  }),
+  investmentStep: DEFAULT_INVESTMENT_STEP_SETTINGS,
+  forecast: DEFAULT_FORECAST_SETTINGS,
+});
+
+function record(value: unknown): Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Readonly<Record<string, unknown>>)
+    : Object.freeze({});
+}
+
+function hydrateV1Settings(value: unknown): FinancialEngineSettings {
+  const persisted = record(value);
+  const spending = record(persisted['spendingBaseline']);
+  if (spending['materialityThreshold'] === undefined) {
+    throw new DataInvariantError(
+      'assembly.missing_materiality_settings',
+      'The persisted settings version must define an explicit materiality threshold.',
+    );
+  }
+  return Object.freeze({
+    effectiveFrom: persisted['effectiveFrom'] as FinancialEngineSettings['effectiveFrom'],
+    version: persisted['version'] as FinancialEngineSettings['version'],
+    spendingBaseline: Object.freeze({
+      ...V1_POLICY_DEFAULTS.spendingBaseline,
+      ...spending,
+    }) as FinancialEngineSettings['spendingBaseline'],
+    liquidity: Object.freeze({
+      ...V1_POLICY_DEFAULTS.liquidity,
+      ...record(persisted['liquidity']),
+    }),
+    safeToInvest: Object.freeze({
+      ...V1_POLICY_DEFAULTS.safeToInvest,
+      ...record(persisted['safeToInvest']),
+    }),
+    cashDrag: Object.freeze({
+      ...V1_POLICY_DEFAULTS.cashDrag,
+      ...record(persisted['cashDrag']),
+    }),
+    investmentStep: Object.freeze({
+      ...V1_POLICY_DEFAULTS.investmentStep,
+      ...record(persisted['investmentStep']),
+    }),
+    forecast: Object.freeze({
+      ...V1_POLICY_DEFAULTS.forecast,
+      ...record(persisted['forecast']),
+    }),
+  });
+}
 
 function rigaDateOfInstant(value: string): string {
   const parts = RIGA_DATE.formatToParts(new Date(value));
@@ -128,7 +212,7 @@ export async function assembleFinancialEngineInput(
         asOf,
       );
       const bankCoverage = await loadMergedEnableBankingCoverage(tx, request.ownerId, asOf);
-      const settingsHistory = parts.settingsHistory as readonly FinancialEngineSettings[];
+      const settingsHistory = Object.freeze(parts.settingsHistory.map(hydrateV1Settings));
       const settingsVersion = effectiveSettingsVersion(settingsHistory, effectiveDate);
       const profile = parts.profile;
       const sourceWatermark = profile['sourceInputWatermark'];
