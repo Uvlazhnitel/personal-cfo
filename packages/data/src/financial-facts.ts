@@ -827,7 +827,12 @@ export async function loadCanonicalFacts(
     economicFlows: Object.freeze(flowRows.map(economicFlowFromRelational)),
     ambiguities: Object.freeze(
       ambiguityRows.map((row) =>
-        createFlowAmbiguity(decodeSourceJson(row.evidence) as FlowAmbiguity),
+        createFlowAmbiguity({
+          transactionId: row.transactionId as FlowAmbiguity['transactionId'],
+          effectiveAt: canonicalDatabaseInstant(row.effectiveAt) as FlowAmbiguity['effectiveAt'],
+          kind: row.kind as FlowAmbiguity['kind'],
+          materiality: row.materiality as FlowAmbiguity['materiality'],
+        }),
       ),
     ),
     cashReconciliations: Object.freeze(

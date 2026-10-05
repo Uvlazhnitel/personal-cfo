@@ -37,6 +37,7 @@ import {
   listEnableBankingDiscoveredAccounts,
   loadMergedEnableBankingCoverage,
   loadEnableBankingActivationReadiness,
+  loadCanonicalFacts,
   loadCanonicalLedgerBalanceAt,
   executeEnableBankingInitialActivation,
   prepareEnableBankingActivation,
@@ -472,6 +473,12 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       expect(await context.db.select().from(accountEntries)).toHaveLength(6);
       expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toHaveLength(1);
       expect(await context.db.select().from(enableBankingBalanceReconciliations)).toHaveLength(1);
+      const canonicalFacts = await loadCanonicalFacts(context.db, ownerId);
+      expect(canonicalFacts.accounts).toMatchObject([{ brokerageCashFor: null }]);
+      expect(canonicalFacts.ambiguities).toHaveLength(5);
+      expect(canonicalFacts.ambiguities.map((ambiguity) => ambiguity.transactionId)).toEqual(
+        expect.arrayContaining(imports.map((item) => item.canonicalTransactionId)),
+      );
       const [snapshot] = await context.db.select().from(accountBalanceSnapshots);
       expect(new Date(snapshot!.sourceAsOf).getTime()).toBeLessThanOrEqual(
         new Date(snapshot!.receivedAt).getTime(),
