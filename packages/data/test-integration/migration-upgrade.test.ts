@@ -99,17 +99,23 @@ suite('Stage 5 schema upgrade', () => {
       valuation.accountId,
       contribution.investmentAccountId,
     ]);
+    const persistedAccounts = scenario.canonical.accounts.filter((account) =>
+      requiredAccountIds.has(account.id),
+    );
     await context.db.insert(accounts).values(
-      scenario.canonical.accounts
-        .filter((account) => requiredAccountIds.has(account.id))
-        .map((account) => ({
-          id: account.id,
-          ownerId,
-          kind: account.subtype,
-          valueSource: account.valueSource,
-          currency: account.currency,
-          payload: encodeSourceJson(account),
-        })),
+      persistedAccounts.map((account) => ({
+        id: account.id,
+        ownerId,
+        kind: account.subtype,
+        valueSource: account.valueSource,
+        currency: account.currency,
+        payload: encodeSourceJson(account),
+      })),
+    );
+    const legacyAccount = persistedAccounts[0]!;
+    await context.pool.query(
+      "update accounts set payload = payload - 'brokerageCashFor' where owner_id = $1 and id = $2",
+      [ownerId, legacyAccount.id],
     );
     const transactionIds = new Set([
       contribution.transactionId,
@@ -192,6 +198,9 @@ suite('Stage 5 schema upgrade', () => {
 
     await migrateDatabase(context.db, resolve(process.cwd(), 'packages/data/migrations'));
     const facts = await loadCanonicalFacts(context.db, ownerId);
+    expect(
+      facts.accounts.find((account) => account.id === legacyAccount.id)?.brokerageCashFor,
+    ).toBe(null);
     expect(facts.accountBalanceSnapshots).toEqual([snapshot]);
     expect(facts.portfolioValuations).toEqual([valuation]);
     expect(facts.investmentContributions).toEqual([contribution]);

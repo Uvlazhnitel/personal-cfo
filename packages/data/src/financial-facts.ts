@@ -639,7 +639,17 @@ export async function loadCanonicalFacts(
     .where(eq(accounts.ownerId, ownerId))
     .orderBy(asc(accounts.id));
   const accountsValue = Object.freeze(
-    accountRows.map((row) => createAccount(decodeSourceJson(row.payload) as Account)),
+    accountRows.map((row) => {
+      const payload = decodeSourceJson(row.payload) as Readonly<Record<string, unknown>>;
+      return createAccount({
+        id: row.id as Account['id'],
+        subtype: row.kind as Account['subtype'],
+        currency: row.currency as Account['currency'],
+        includeInNetWorth: payload['includeInNetWorth'] as Account['includeInNetWorth'],
+        valueSource: row.valueSource as Account['valueSource'],
+        brokerageCashFor: (payload['brokerageCashFor'] ?? null) as Account['brokerageCashFor'],
+      });
+    }),
   );
   const versions = await db
     .select()
