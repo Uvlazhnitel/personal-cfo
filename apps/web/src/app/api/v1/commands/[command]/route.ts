@@ -8,6 +8,7 @@ import {
   appendReconciliationResolution,
   bootstrapCashAccount,
   bootstrapConservativeEvaluationProfile,
+  classifyBankTransactionAsPrimarySalary,
   executeFinancialCommand,
   resolveTransferCandidate,
   setDecisionHistoryBoundary,
@@ -41,6 +42,7 @@ const COMMANDS = [
   'engine-profile-bootstrap',
   'cash-account-bootstrap',
   'decision-history-boundary',
+  'bank-primary-salary',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -251,6 +253,8 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'cash_account_bootstrap';
     case 'decision-history-boundary':
       return 'decision_history_boundary';
+    case 'bank-primary-salary':
+      return 'bank_primary_salary';
   }
 }
 
@@ -311,6 +315,13 @@ export async function POST(
               now,
               requiredString(raw['reason'], 'reason'),
             );
+          case 'bank-primary-salary':
+            requireOnlyKeys(raw, ['transactionId', 'reason']);
+            return classifyBankTransactionAsPrimarySalary(tx, session.ownerId, {
+              transactionId: requiredString(raw['transactionId'], 'transactionId'),
+              now,
+              reason: requiredString(raw['reason'], 'reason'),
+            });
           case 'transfer-resolution': {
             const resolution = raw['resolution'];
             if (resolution !== 'confirmed_transfer' && resolution !== 'rejected_transfer')
