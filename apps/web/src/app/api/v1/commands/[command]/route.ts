@@ -8,6 +8,7 @@ import {
   appendReconciliationResolution,
   bootstrapCashAccount,
   bootstrapConservativeEvaluationProfile,
+  classifyBankTransactionAsExternalFlow,
   classifyBankTransactionAsPrimarySalary,
   executeFinancialCommand,
   resolveTransferCandidate,
@@ -15,6 +16,7 @@ import {
 } from '@personal-cfo/data';
 import type {
   EconomicFlowClassification,
+  BankExternalFlowClassification,
   MaterialitySettingsInput,
   RecalculationCause,
 } from '@personal-cfo/data';
@@ -42,6 +44,7 @@ const COMMANDS = [
   'engine-profile-bootstrap',
   'cash-account-bootstrap',
   'decision-history-boundary',
+  'bank-external-flow',
   'bank-primary-salary',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
@@ -111,6 +114,33 @@ export function parseClassificationInput(value: unknown): EconomicFlowClassifica
       return Object.freeze({ kind: value['kind'] });
     default:
       throw new DataInvariantError('http.invalid_request', 'classification.kind is invalid.');
+  }
+}
+
+export function parseBankExternalFlowClassificationInput(
+  value: unknown,
+): BankExternalFlowClassification {
+  const classification = parseClassificationInput(value);
+  switch (classification.kind) {
+    case 'consumption':
+      return classification;
+    case 'other_external_flow':
+      return { kind: 'other_external_flow' };
+    case 'refund':
+    case 'reimbursement':
+      if (classification.relatedTransactionId === null) {
+        throw new DataInvariantError(
+          'http.invalid_request',
+          'A bank refund or reimbursement requires relatedTransactionId.',
+        );
+      }
+      return { ...classification, relatedTransactionId: classification.relatedTransactionId };
+    case 'earned_income':
+    case 'cash_reconciliation_adjustment':
+      throw new DataInvariantError(
+        'http.invalid_request',
+        'classification.kind is not supported by bank-external-flow.',
+      );
   }
 }
 
@@ -260,6 +290,8 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'cash_account_bootstrap';
     case 'decision-history-boundary':
       return 'decision_history_boundary';
+    case 'bank-external-flow':
+      return 'bank_external_flow';
     case 'bank-primary-salary':
       return 'bank_primary_salary';
   }
@@ -326,6 +358,14 @@ export async function POST(
             requireOnlyKeys(raw, ['transactionId', 'reason']);
             return classifyBankTransactionAsPrimarySalary(tx, session.ownerId, {
               transactionId: requiredString(raw['transactionId'], 'transactionId'),
+              now,
+              reason: requiredString(raw['reason'], 'reason'),
+            });
+          case 'bank-external-flow':
+            requireOnlyKeys(raw, ['transactionId', 'classification', 'reason']);
+            return classifyBankTransactionAsExternalFlow(tx, session.ownerId, {
+              transactionId: requiredString(raw['transactionId'], 'transactionId'),
+              classification: parseBankExternalFlowClassificationInput(raw['classification']),
               now,
               reason: requiredString(raw['reason'], 'reason'),
             });
