@@ -159,6 +159,7 @@ export async function classifyBankTransactionAsPrimarySalary(
     payload: encodeEconomicFlowClassification({
       kind: 'earned_income',
       earnedIncomeSource: 'salary',
+      primarySalary: true,
     }),
     decidedAt: now,
     isCurrent: true,

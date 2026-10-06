@@ -2,12 +2,39 @@ import { describe, expect, it } from 'vitest';
 
 import {
   parseCashAccountBootstrapInput,
+  parseClassificationInput,
   parseDecisionHistoryBoundaryInput,
   parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
   reviveMoney,
   serializeCommandResponse,
 } from '../src/app/api/v1/commands/[command]/route.js';
+
+describe('classification correction request', () => {
+  it('preserves an explicit supplemental salary decision', () => {
+    expect(
+      parseClassificationInput({
+        kind: 'earned_income',
+        earnedIncomeSource: 'salary',
+        primarySalary: false,
+      }),
+    ).toEqual({
+      kind: 'earned_income',
+      earnedIncomeSource: 'salary',
+      primarySalary: false,
+    });
+  });
+
+  it('rejects a non-boolean primary salary value', () => {
+    expect(() =>
+      parseClassificationInput({
+        kind: 'earned_income',
+        earnedIncomeSource: 'salary',
+        primarySalary: 'false',
+      }),
+    ).toThrow(expect.objectContaining({ code: 'http.invalid_request' }));
+  });
+});
 
 describe('materiality settings command request', () => {
   it('accepts an exact non-negative EUR minor-unit amount and explicit reason', () => {

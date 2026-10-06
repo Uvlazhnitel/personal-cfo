@@ -13,6 +13,7 @@ import type { PgBoss } from 'pg-boss';
 import {
   accountEntries,
   accounts,
+  appendClassificationCorrection,
   auditEvents,
   classifyBankTransactionAsPrimarySalary,
   createDatabaseContext,
@@ -25,6 +26,7 @@ import {
   flowAmbiguities,
   flowClassifications,
   generateUuidV7,
+  loadCanonicalFacts,
   migrateDatabase,
   ownerInputVersions,
   primarySalaryTriggers,
@@ -175,7 +177,7 @@ suite('owner-confirmed bank primary salary classification', () => {
       effectiveDate: '2026-08-05',
     });
     const flowId = first.result['flowId'];
-    expect(typeof flowId).toBe('string');
+    if (typeof flowId !== 'string') throw new Error('Salary flow ID is missing.');
     expect(
       await context.db.select().from(economicFlows).where(eq(economicFlows.ownerId, ownerId)),
     ).toMatchObject([{ transactionId, amountMinor: 45_224n, currency: 'EUR' }]);
@@ -226,6 +228,61 @@ suite('owner-confirmed bank primary salary classification', () => {
     await expect(run(ownerId, transactionId, 'bank-primary-salary-other')).rejects.toMatchObject({
       code: 'bank_salary.not_unresolved',
     });
+
+    const correctionRequest = {
+      flowId,
+      classification: {
+        kind: 'earned_income' as const,
+        earnedIncomeSource: 'salary' as const,
+        primarySalary: false,
+      },
+      reason: 'Owner confirmed this salary receipt is supplemental, not a Pay Cycle boundary.',
+    };
+    const corrected = await executeFinancialCommand(
+      context.db,
+      boss,
+      {
+        ownerId,
+        kind: 'classification_correction',
+        idempotencyKey: 'bank-supplemental-salary-001',
+        request: correctionRequest,
+        asOf: '2026-10-06T08:05:00Z',
+        effectiveDate: '2026-10-06',
+        now: '2026-10-06T08:05:00Z',
+      },
+      (tx) =>
+        appendClassificationCorrection(
+          tx,
+          ownerId,
+          flowId,
+          correctionRequest.classification,
+          '2026-10-06T08:05:00Z',
+          correctionRequest.reason,
+        ),
+    );
+    expect(corrected).toMatchObject({ replayed: false, mutated: true, inputVersion: 2n });
+    const classifications = await context.db
+      .select()
+      .from(flowClassifications)
+      .where(eq(flowClassifications.ownerId, ownerId));
+    expect(classifications).toHaveLength(2);
+    expect(classifications).toContainEqual(
+      expect.objectContaining({ revision: 1, isCurrent: false }),
+    );
+    expect(classifications).toContainEqual(
+      expect.objectContaining({ revision: 2, isCurrent: true }),
+    );
+    expect(
+      await context.db
+        .select()
+        .from(primarySalaryTriggers)
+        .where(eq(primarySalaryTriggers.ownerId, ownerId)),
+    ).toHaveLength(1);
+    const canonical = await loadCanonicalFacts(context.db, ownerId);
+    expect(canonical.economicFlows).toMatchObject([
+      { transactionId, kind: 'earned_income', source: 'salary' },
+    ]);
+    expect(canonical.primarySalaryTriggers).toEqual([]);
   });
 
   it('rejects a debit without advancing the input version', async () => {
