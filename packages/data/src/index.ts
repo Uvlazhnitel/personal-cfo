@@ -1,4 +1,5 @@
 export * from './auth.js';
+export * from './bank-primary-salary.js';
 export * from './cash-account-bootstrap.js';
 export * from './commands.js';
 export * from './database.js';
