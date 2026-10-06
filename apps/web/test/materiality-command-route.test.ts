@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseBankExternalFlowClassificationInput,
   parseCashAccountBootstrapInput,
   parseClassificationInput,
   parseDecisionHistoryBoundaryInput,
@@ -9,6 +10,35 @@ import {
   reviveMoney,
   serializeCommandResponse,
 } from '../src/app/api/v1/commands/[command]/route.js';
+
+describe('bank external-flow classification request', () => {
+  it('accepts only supported explicit classifications', () => {
+    expect(
+      parseBankExternalFlowClassificationInput({ kind: 'consumption', reimbursable: false }),
+    ).toEqual({ kind: 'consumption', reimbursable: false });
+    expect(
+      parseBankExternalFlowClassificationInput({
+        kind: 'reimbursement',
+        relatedTransactionId: '01a108b9-2730-701f-8fd1-c28cd1920c5e',
+      }),
+    ).toEqual({
+      kind: 'reimbursement',
+      relatedTransactionId: '01a108b9-2730-701f-8fd1-c28cd1920c5e',
+    });
+    expect(parseBankExternalFlowClassificationInput({ kind: 'other_external_flow' })).toEqual({
+      kind: 'other_external_flow',
+    });
+  });
+
+  it.each([
+    { kind: 'earned_income', earnedIncomeSource: 'other' },
+    { kind: 'cash_reconciliation_adjustment' },
+    { kind: 'reimbursement', relatedTransactionId: null },
+    { kind: 'other_external_flow', ownerId: 'forbidden' },
+  ])('rejects unsupported or identity-bearing input %#', (classification) => {
+    expect(() => parseBankExternalFlowClassificationInput(classification)).toThrow();
+  });
+});
 
 describe('classification correction request', () => {
   it('preserves an explicit supplemental salary decision', () => {

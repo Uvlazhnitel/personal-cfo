@@ -476,7 +476,7 @@ Canonical import requires the deployment switch, verified stable account identit
 
 **Reasoning:** Telegram and cash-transfer resolution require exactly one ledger-authoritative Cash Account, while production currently has none. An explicit opening fact establishes the measurement boundary without treating cash already held as earned income or capital creation. Server-generated account, transaction, and entry identities prevent caller-controlled ownership or canonical structure.
 
-**Consequences:** The bootstrap neither changes the bank ledger nor creates an economic flow or classification. Historical cash activity before the owner-confirmed cutover remains unavailable rather than fabricated. Other manual account and liability opening-balance policies remain unresolved.
+**Consequences:** The bootstrap neither changes the bank ledger nor creates an economic flow or classification. Historical cash activity before the owner-confirmed cutover remains unavailable rather than fabricated. An owner-confirmed pre-cutover cash deposit may be disclosed as a CCR-neutral external flow so it is not mistaken for income, but it must not add a historical Cash Account entry or change the confirmed cutover balance. Only post-cutover cash deposits may become Cash Account-to-bank transfers. Other manual account and liability opening-balance policies remain unresolved.
 
 ## ADR-042 — Owner-Confirmed Decision History Boundary
 
