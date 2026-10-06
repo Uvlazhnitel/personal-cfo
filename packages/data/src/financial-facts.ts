@@ -118,7 +118,11 @@ export type PersistableEvaluation = Readonly<{
 type DatabaseClient = Database | DatabaseTransaction;
 
 export type EconomicFlowClassification =
-  | Readonly<{ kind: 'earned_income'; earnedIncomeSource: EarnedIncomeSource }>
+  | Readonly<{
+      kind: 'earned_income';
+      earnedIncomeSource: EarnedIncomeSource;
+      primarySalary?: boolean;
+    }>
   | Readonly<{ kind: 'consumption'; reimbursable: boolean }>
   | Readonly<{
       kind: 'refund' | 'reimbursement';
@@ -149,7 +153,12 @@ export function encodeEconomicFlowClassification(
 ): ReturnType<typeof encodeSourceJson> {
   switch (classification.kind) {
     case 'earned_income':
-      return encodeSourceJson({ earnedIncomeSource: classification.earnedIncomeSource });
+      return encodeSourceJson({
+        earnedIncomeSource: classification.earnedIncomeSource,
+        ...(classification.primarySalary === undefined
+          ? {}
+          : { primarySalary: classification.primarySalary }),
+      });
     case 'consumption':
       return encodeSourceJson({ reimbursable: classification.reimbursable });
     case 'refund':
@@ -761,6 +770,15 @@ export async function loadCanonicalFacts(
       asc(primarySalaryTriggerRows.effectiveDate),
       asc(primarySalaryTriggerRows.transactionId),
     );
+  const supplementalSalaryTransactionIds = new Set(
+    flowRows
+      .filter((row) => {
+        if (row.kind !== 'earned_income') return false;
+        const payload = decodeSourceJson(row.payload) as Readonly<Record<string, unknown>>;
+        return payload['primarySalary'] === false;
+      })
+      .map((row) => row.transactionId),
+  );
   const observationRows = await db
     .select()
     .from(spendingObservationRows)
@@ -817,12 +835,14 @@ export async function loadCanonicalFacts(
       ),
     ),
     primarySalaryTriggers: Object.freeze(
-      salaryRows.map((row) =>
-        createPrimarySalaryTrigger({
-          transactionId: row.transactionId as never,
-          effectiveDate: row.effectiveDate as never,
-        }),
-      ),
+      salaryRows
+        .filter((row) => !supplementalSalaryTransactionIds.has(row.transactionId))
+        .map((row) =>
+          createPrimarySalaryTrigger({
+            transactionId: row.transactionId as never,
+            effectiveDate: row.effectiveDate as never,
+          }),
+        ),
     ),
     economicFlows: Object.freeze(flowRows.map(economicFlowFromRelational)),
     ambiguities: Object.freeze(

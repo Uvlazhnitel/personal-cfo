@@ -71,13 +71,20 @@ export function parseClassificationInput(value: unknown): EconomicFlowClassifica
     throw new DataInvariantError('http.invalid_request', 'classification must be an object.');
   switch (value['kind']) {
     case 'earned_income':
-      requireOnlyKeys(value, ['kind', 'earnedIncomeSource']);
+      requireOnlyKeys(value, ['kind', 'earnedIncomeSource', 'primarySalary']);
+      if (value['primarySalary'] !== undefined && typeof value['primarySalary'] !== 'boolean') {
+        throw new DataInvariantError(
+          'http.invalid_request',
+          'classification.primarySalary must be a boolean when supplied.',
+        );
+      }
       return Object.freeze({
         kind: value['kind'],
         earnedIncomeSource: requiredString(
           value['earnedIncomeSource'],
           'classification.earnedIncomeSource',
         ) as never,
+        ...(value['primarySalary'] === undefined ? {} : { primarySalary: value['primarySalary'] }),
       });
     case 'consumption':
       requireOnlyKeys(value, ['kind', 'reimbursable']);
