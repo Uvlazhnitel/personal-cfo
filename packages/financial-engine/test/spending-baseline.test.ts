@@ -352,6 +352,84 @@ describe('spending baseline', () => {
     ).toThrow('An unlinked reversal cannot appear in a complete baseline month.');
   });
 
+  it('treats valid consumption without a spending observation as unavailable input', () => {
+    const item = consumption(1460, '2026-01-20', 10_000n);
+    const result = calculateSpendingBaseline(input([item.flow], []));
+
+    expect(result).toMatchObject({
+      status: 'unavailable',
+      value: null,
+      warnings: [
+        {
+          code: 'baseline.missing_spending_observation',
+          context: { count: '1' },
+        },
+      ],
+    });
+  });
+
+  it.each(['refund', 'reimbursement'] as const)(
+    'treats a valid linked %s without observations as unavailable input',
+    (kind) => {
+      const original = consumption(1461, '2026-01-10', 10_000n, {
+        reimbursable: kind === 'reimbursement',
+      });
+      const reversal = createEconomicFlow({
+        id: parseEconomicFlowId(uuid(3461)),
+        transactionId: parseTransactionId(uuid(2462)),
+        effectiveAt: parseInstant('2026-01-20T12:00:00Z'),
+        amount: createMoney(4_000n, EUR),
+        kind,
+        relatedTransactionId: original.flow.transactionId,
+      });
+      const result = calculateSpendingBaseline(input([original.flow, reversal], []));
+
+      expect(result).toMatchObject({
+        status: 'unavailable',
+        value: null,
+        warnings: [
+          {
+            code: 'baseline.missing_spending_observation',
+            context: { count: '2' },
+          },
+        ],
+      });
+    },
+  );
+
+  it('reports missing observations and recurring coverage in deterministic order', () => {
+    const first = consumption(1463, '2026-01-10', 10_000n);
+    const second = consumption(1464, '2026-02-10', 12_000n);
+    const run = (flows: readonly EconomicFlow[]) =>
+      calculateSpendingBaseline(input(flows, [], { recurringScheduleComplete: false }));
+
+    expect(run([first.flow, second.flow])).toEqual(run([second.flow, first.flow]));
+    expect(run([first.flow, second.flow]).warnings).toEqual([
+      { code: 'baseline.missing_spending_observation', context: { count: '2' } },
+      { code: 'baseline.missing_recurring_schedule', context: {} },
+    ]);
+  });
+
+  it('still rejects an observation that references no compatible spending flow', () => {
+    const item = consumption(1465, '2026-01-20', 10_000n);
+    const invalid = createSpendingObservation({
+      ...item.observation,
+      economicFlowId: parseEconomicFlowId(uuid(3465)),
+    });
+
+    expect(() => calculateSpendingBaseline(input([item.flow], [invalid]))).toThrow(
+      'A spending observation must reference consumption, refund, or reimbursement.',
+    );
+  });
+
+  it('still rejects duplicate observations for one flow', () => {
+    const item = consumption(1466, '2026-01-20', 10_000n);
+
+    expect(() =>
+      calculateSpendingBaseline(input([item.flow], [item.observation, item.observation])),
+    ).toThrow('A flow can have only one spending observation.');
+  });
+
   it('winsorizes high category outliers at median plus the materiality floor', () => {
     const amounts = [10_000n, 10_000n, 10_000n, 10_000n, 10_000n, 100_000n];
     const items = amounts.map((amount, index) =>

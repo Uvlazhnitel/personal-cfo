@@ -490,6 +490,16 @@ The canonical ledger, account balances, and provider evidence remain complete an
 
 **Consequences:** The boundary creates no transaction, economic flow, classification, balance, valuation, contribution, schedule, or planning fact. Post-boundary ambiguity remains authoritative and can still block metrics. Salary and transfers require explicit later commands; the boundary cannot make unavailable liquidity, obligation, reservation, or pay-schedule inputs complete.
 
+## ADR-043 — Independent CCR and Incomplete Spending Classification
+
+**Status:** Accepted — 2026-10-06
+
+**Decision:** A valid canonical consumption, refund, or reimbursement flow may exist before its category-level `SpendingObservation` is supplied. This absence is a completeness condition rather than a structural invariant: the Spending Baseline returns unavailable with `baseline.missing_spending_observation` and no value. No category, necessity, cadence, or irregular flag is inferred. Duplicate observations and observations referencing missing or incompatible flows remain hard invariants. CCR continues under its own economic-flow, ambiguity, coverage, reconciliation, income, and reservation rules without depending on spending observations.
+
+**Reasoning:** Owner-confirmed economic meaning is sufficient for CCR but does not establish the category-level facts required for a reliable spending baseline. Making the entire engine run fail couples independent metrics and prevents valid CCR publication; inventing observations would create false completeness.
+
+**Consequences:** Missing spending observations keep the baseline and liquidity unavailable and keep Available Cash, Comfort Reserve, and Safe to Invest fail-closed. Fully categorized inputs retain existing results. The same canonical input produces deterministic warning order, statuses, values, and snapshots.
+
 ## Open Decisions
 
 | Decision | Why it remains open | Owner | Resolve no later than |

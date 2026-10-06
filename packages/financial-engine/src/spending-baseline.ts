@@ -343,19 +343,18 @@ function validateFacts(input: SpendingBaselineInput) {
       }
     }
   }
+  let missingSpendingObservationCount = 0;
   for (const flow of flows) {
     if (
       (flow.kind === 'consumption' || flow.kind === 'refund' || flow.kind === 'reimbursement') &&
       !observationByFlow.has(flow.id)
     ) {
-      throw new FinancialEngineInvariantError(
-        'baseline.missing_spending_observation',
-        'Every spending or reversal flow in baseline history requires a spending observation.',
-      );
+      missingSpendingObservationCount += 1;
     }
     if (
       (flow.kind === 'refund' || flow.kind === 'reimbursement') &&
-      flow.relatedTransactionId === null
+      flow.relatedTransactionId === null &&
+      observationByFlow.has(flow.id)
     ) {
       const observation = observationByFlow.get(flow.id)!;
       const month = coverage.find((item) => item.month === yearMonthOf(observation.economicDate));
@@ -381,6 +380,7 @@ function validateFacts(input: SpendingBaselineInput) {
     flowById,
     observationByFlow,
     flowByTransaction,
+    missingSpendingObservationCount,
   };
 }
 
@@ -612,13 +612,30 @@ export function calculateSpendingBaseline(
     settingsVersion: input.settingsVersion,
     inputWatermark: input.inputWatermark,
   } as const;
+  if (facts.missingSpendingObservationCount > 0) {
+    warnings.push(
+      warning('baseline.missing_spending_observation', {
+        count: facts.missingSpendingObservationCount.toString(),
+      }),
+    );
+  }
   if (!input.recurringScheduleComplete) {
+    warnings.push(warning('baseline.missing_recurring_schedule'));
     return createMetricResult<SpendingBaseline>({
       ...base,
       status: 'unavailable',
       value: null,
       explanation: [],
-      warnings: [warning('baseline.missing_recurring_schedule')],
+      warnings,
+    });
+  }
+  if (facts.missingSpendingObservationCount > 0) {
+    return createMetricResult<SpendingBaseline>({
+      ...base,
+      status: 'unavailable',
+      value: null,
+      explanation: [],
+      warnings,
     });
   }
   if (

@@ -139,6 +139,68 @@ suite('recalculation publication consistency', () => {
     return recalculateFinancialState(context.db, jobFromRecord(ownerId, record, asOf));
   }
 
+  it('publishes CCR independently while uncategorized spending remains fail-closed', async () => {
+    const scenario = buildSyntheticScenario('healthy_current');
+    const missingFlows = [
+      scenario.canonical.economicFlows.find((flow) => flow.kind === 'consumption'),
+      scenario.canonical.economicFlows.find(
+        (flow) => flow.kind === 'refund' || flow.kind === 'reimbursement',
+      ),
+    ];
+    if (missingFlows.some((flow) => flow === undefined))
+      throw new Error('Synthetic scenario requires consumption and reversal flows.');
+    const missingFlowIds = new Set(missingFlows.map((flow) => flow!.id));
+    const productionLike = Object.freeze({
+      ...scenario,
+      canonical: Object.freeze({
+        ...scenario.canonical,
+        spendingObservations: Object.freeze(
+          scenario.canonical.spendingObservations.filter(
+            (observation) => !missingFlowIds.has(observation.economicFlowId),
+          ),
+        ),
+      }),
+    });
+
+    const { ownerId, result } = await seedSynthetic('healthy_current', productionLike);
+    expect(
+      productionLike.canonical.ambiguities.filter((item) => item.materiality === 'material'),
+    ).toEqual([]);
+    expect(result.ccr.status).toBe('complete');
+    expect(result.spendingBaseline).toMatchObject({
+      status: 'unavailable',
+      value: null,
+      warnings: [
+        {
+          code: 'baseline.missing_spending_observation',
+          context: { count: '2' },
+        },
+      ],
+    });
+    expect(result.liquidityReserve.status).toBe('unavailable');
+    expect(result.safeToInvest.status).toBe('unavailable');
+
+    const snapshots = await context.db
+      .select()
+      .from(metricSnapshots)
+      .where(and(eq(metricSnapshots.ownerId, ownerId), eq(metricSnapshots.isAuthoritative, true)));
+    const byKind = new Map(snapshots.map((snapshot) => [snapshot.metricKind, snapshot]));
+    expect(byKind.get('ccr')?.status).toBe('complete');
+    expect(byKind.get('spendingBaseline')?.status).toBe('unavailable');
+    expect(byKind.get('liquidityReserve')?.status).toBe('unavailable');
+    expect(byKind.get('safeToInvest')?.status).toBe('unavailable');
+    expect(
+      (
+        byKind.get('spendingBaseline')?.payload as {
+          warnings?: readonly Readonly<{
+            code?: string;
+            context?: Readonly<Record<string, string>>;
+          }>[];
+        }
+      ).warnings,
+    ).toEqual([{ code: 'baseline.missing_spending_observation', context: { count: '2' } }]);
+  });
+
   it('marks an out-of-order old job superseded and publishes only the newest version', async () => {
     const { ownerId } = await seedSynthetic();
     const boss = createJobBoss(databaseUrl!, 2);
