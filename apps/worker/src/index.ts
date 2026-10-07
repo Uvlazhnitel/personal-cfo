@@ -5,7 +5,11 @@ import {
   requireDatabaseUrl,
 } from '@personal-cfo/data';
 import type { RecalculationJob, SinkingAllocationJob } from '@personal-cfo/data';
-import { processAutomaticSinkingAllocationJob, processRecalculationJob } from './job-handlers.js';
+import {
+  processAutomaticSinkingAllocationJob,
+  processRecalculationDeadLetter,
+  processRecalculationJob,
+} from './job-handlers.js';
 import { startEnableBankingRuntime } from './enable-banking/runtime.js';
 import { telegramConfiguration } from './telegram/config.js';
 import { startTelegramRuntime } from './telegram/runtime.js';
@@ -25,6 +29,15 @@ await boss.work<RecalculationJob>(JOB_QUEUES.recalculate, { batchSize: 1 }, asyn
     await processRecalculationJob(database.db, boss, job, log);
   }
 });
+await boss.work<Readonly<{ requestId: string }>>(
+  JOB_QUEUES.recalculateDead,
+  { batchSize: 1 },
+  async (jobs) => {
+    for (const job of jobs) {
+      await processRecalculationDeadLetter(database.db, job, log);
+    }
+  },
+);
 await boss.work<SinkingAllocationJob>(
   JOB_QUEUES.sinkingAllocate,
   { batchSize: 1 },

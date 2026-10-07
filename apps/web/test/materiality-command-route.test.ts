@@ -7,9 +7,110 @@ import {
   parseDecisionHistoryBoundaryInput,
   parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
+  parsePlanningContextUpdateInput,
+  parseSpendingObservationInput,
   reviveMoney,
   serializeCommandResponse,
 } from '../src/app/api/v1/commands/[command]/route.js';
+
+describe('spending observation request', () => {
+  it('accepts explicit consumption semantics and a semantics-free linked reversal', () => {
+    expect(
+      parseSpendingObservationInput({
+        economicFlowId: 'flow-1',
+        categoryCode: 'health',
+        cadence: 'variable',
+        irregular: true,
+        reason: 'Owner confirmed.',
+      }),
+    ).toEqual({
+      economicFlowId: 'flow-1',
+      categoryCode: 'health',
+      cadence: 'variable',
+      irregular: true,
+      reason: 'Owner confirmed.',
+    });
+    expect(
+      parseSpendingObservationInput({ economicFlowId: 'flow-2', reason: 'Linked reversal.' }),
+    ).toEqual({ economicFlowId: 'flow-2', reason: 'Linked reversal.' });
+  });
+
+  it.each([
+    { economicFlowId: 'flow', categoryCode: 'health', cadence: 'variable', reason: 'missing bool' },
+    {
+      economicFlowId: 'flow',
+      categoryCode: 'health',
+      cadence: 'variable',
+      irregular: true,
+      necessity: 'essential',
+      reason: 'forbidden',
+    },
+    { economicFlowId: 'flow', ownerId: 'caller-controlled', reason: 'forbidden' },
+    { economicFlowId: 'flow', transactionId: 'caller-controlled', reason: 'forbidden' },
+    { economicFlowId: 'flow', amountMinor: 100n, reason: 'forbidden' },
+    { economicFlowId: 'flow', economicDate: '2026-09-26', reason: 'forbidden' },
+  ])('rejects incomplete or caller-controlled fields %#', (request) => {
+    expect(() => parseSpendingObservationInput(request)).toThrow();
+  });
+});
+
+describe('planning context update request', () => {
+  const request = {
+    scheduledRecurring: [{ dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport' }],
+    recurringScheduleComplete: true,
+    operationalNeeds: [],
+    operationalNeedsComplete: true,
+    futureObligations: [],
+    obligationsComplete: true,
+    otherRestrictedCash: [],
+    restrictedCashComplete: true,
+    primaryPaySchedule: { kind: 'monthly_day_of_month', dayOfMonth: 5 },
+    reason: 'Owner confirmed current planning declarations.',
+  } as const;
+
+  it('accepts explicit complete empty sets and the recurring gym schedule', () => {
+    expect(
+      parsePlanningContextUpdateInput(request, '2026-10-07T12:00:00Z', '2026-10-07'),
+    ).toMatchObject({
+      scheduledRecurring: [{ dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport' }],
+      operationalNeeds: [],
+      operationalNeedsComplete: true,
+      primaryPaySchedule: { kind: 'monthly_day_of_month', dayOfMonth: 5 },
+    });
+  });
+
+  it('rejects caller-controlled IDs, currency, and generated pay dates', () => {
+    for (const invalid of [
+      { ...request, ownerId: 'forbidden' },
+      {
+        ...request,
+        scheduledRecurring: [
+          { dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport', currency: 'EUR' },
+        ],
+      },
+      {
+        ...request,
+        primaryPaySchedule: {
+          kind: 'monthly_day_of_month',
+          dayOfMonth: 5,
+          dates: ['2026-11-05'],
+        },
+      },
+      {
+        ...request,
+        scheduledRecurring: [{ dueDate: '2026-11-31', amountMinor: 1_999n, categoryCode: 'sport' }],
+      },
+      {
+        ...request,
+        primaryPaySchedule: { kind: 'monthly_day_of_month', dayOfMonth: 31 },
+      },
+    ]) {
+      expect(() =>
+        parsePlanningContextUpdateInput(invalid, '2026-10-07T12:00:00Z', '2026-10-07'),
+      ).toThrow();
+    }
+  });
+});
 
 describe('bank external-flow classification request', () => {
   it('accepts only supported explicit classifications', () => {

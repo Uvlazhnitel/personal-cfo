@@ -1407,6 +1407,28 @@ export async function loadLatestEnableBankingReconciliation(
   );
 }
 
+export async function loadLatestEnableBankingReconciliationsByAccount(
+  db: Database | DatabaseTransaction,
+  ownerId: string,
+  at: string,
+): Promise<readonly (typeof enableBankingBalanceReconciliations.$inferSelect)[]> {
+  const rows = await db.query.enableBankingBalanceReconciliations.findMany({
+    where: and(
+      eq(enableBankingBalanceReconciliations.ownerId, ownerId),
+      lte(enableBankingBalanceReconciliations.createdAt, at),
+    ),
+    orderBy: (table, { desc }) => [desc(table.createdAt)],
+  });
+  const seen = new Set<string>();
+  return Object.freeze(
+    rows.filter((row) => {
+      if (seen.has(row.canonicalAccountId)) return false;
+      seen.add(row.canonicalAccountId);
+      return true;
+    }),
+  );
+}
+
 export type EnableBankingCoverageInterval = Readonly<{
   coveredFrom: string;
   coveredThrough: string;

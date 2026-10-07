@@ -2,6 +2,7 @@ import {
   appendManualSinkingAllocation,
   DataInvariantError,
   executeFinancialCommand,
+  failRecalculationAfterRetryExhaustion,
   generateUuidV7,
   JOB_QUEUES,
   updateRecalculationStatus,
@@ -27,6 +28,23 @@ export type RecalculationJobOutcome =
   | Readonly<{ status: 'dead_lettered'; category: 'permanent_input' }>;
 
 export type WorkerEventLogger = (event: string, fields?: Readonly<Record<string, unknown>>) => void;
+
+export async function processRecalculationDeadLetter(
+  db: Database,
+  job: Job<Readonly<{ requestId: string }>>,
+  log: WorkerEventLogger = () => undefined,
+): Promise<void> {
+  const changed = await failRecalculationAfterRetryExhaustion(
+    db,
+    job.data.requestId,
+    new Date().toISOString(),
+  );
+  log('financial.recalculation.retry-exhausted', {
+    jobId: job.id,
+    requestId: job.data.requestId,
+    statusChanged: changed,
+  });
+}
 
 export async function processRecalculationJob(
   db: Database,
