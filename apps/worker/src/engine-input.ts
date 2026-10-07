@@ -23,6 +23,8 @@ import {
 } from '@personal-cfo/financial-engine';
 import type { FinancialEngineInput, FinancialEngineSettings } from '@personal-cfo/financial-engine';
 
+import { deriveRunPlanningContext } from './planning-recurrence.js';
+
 export type FinancialEngineAssemblyRequest = Readonly<{
   ownerId: string;
   expectedInputVersion: bigint;
@@ -463,6 +465,15 @@ export async function assembleFinancialEngineInput(
       const bankCoverage = await loadMergedEnableBankingCoverage(tx, request.ownerId, asOf);
       const settingsHistory = Object.freeze(parts.settingsHistory.map(hydrateV1Settings));
       const settingsVersion = effectiveSettingsVersion(settingsHistory, effectiveDate);
+      const effectiveSettings = settingsHistory.find(
+        (settings) => settings.version === settingsVersion,
+      );
+      if (effectiveSettings === undefined) {
+        throw new DataInvariantError(
+          'assembly.missing_effective_settings',
+          'The selected settings version is missing from settings history.',
+        );
+      }
       const profile = parts.profile;
       const boundaryStart = decisionHistoryStart(profile);
       const sourceWatermark = profile['sourceInputWatermark'];
@@ -496,7 +507,7 @@ export async function assembleFinancialEngineInput(
         boundaryStart === null
           ? loadedCanonical
           : canonicalAtDecisionBoundary(loadedCanonical, boundaryStart);
-      const current = deriveEvidenceBackedCurrentContext({
+      const evidenceCurrent = deriveEvidenceBackedCurrentContext({
         current: reconciledCurrent,
         canonical,
         bankCoverage,
@@ -507,6 +518,11 @@ export async function assembleFinancialEngineInput(
         engineVersion: String(profile['engineVersion']),
         inputWatermark,
       });
+      const current = deriveRunPlanningContext(
+        evidenceCurrent,
+        effectiveDate,
+        effectiveSettings.liquidity.unknownIncomeHorizonDays,
+      );
       const ccrPeriod =
         boundaryStart === null ? profile['ccrPeriod'] : persistedCurrent.historyCoverage;
       const input = Object.freeze({

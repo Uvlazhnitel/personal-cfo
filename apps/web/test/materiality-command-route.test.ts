@@ -56,7 +56,13 @@ describe('spending observation request', () => {
 
 describe('planning context update request', () => {
   const request = {
-    scheduledRecurring: [{ dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport' }],
+    scheduledRecurring: [
+      {
+        amountMinor: 1_999n,
+        categoryCode: 'sport',
+        recurrence: { kind: 'monthly_day_of_month', dayOfMonth: 3 },
+      },
+    ],
     recurringScheduleComplete: true,
     operationalNeeds: [],
     operationalNeedsComplete: true,
@@ -72,7 +78,13 @@ describe('planning context update request', () => {
     expect(
       parsePlanningContextUpdateInput(request, '2026-10-07T12:00:00Z', '2026-10-07'),
     ).toMatchObject({
-      scheduledRecurring: [{ dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport' }],
+      scheduledRecurring: [
+        {
+          amountMinor: 1_999n,
+          categoryCode: 'sport',
+          recurrence: { kind: 'monthly_day_of_month', dayOfMonth: 3 },
+        },
+      ],
       operationalNeeds: [],
       operationalNeedsComplete: true,
       primaryPaySchedule: { kind: 'monthly_day_of_month', dayOfMonth: 5 },
@@ -85,7 +97,12 @@ describe('planning context update request', () => {
       {
         ...request,
         scheduledRecurring: [
-          { dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport', currency: 'EUR' },
+          {
+            amountMinor: 1_999n,
+            categoryCode: 'sport',
+            recurrence: { kind: 'monthly_day_of_month', dayOfMonth: 3 },
+            currency: 'EUR',
+          },
         ],
       },
       {
@@ -98,7 +115,13 @@ describe('planning context update request', () => {
       },
       {
         ...request,
-        scheduledRecurring: [{ dueDate: '2026-11-31', amountMinor: 1_999n, categoryCode: 'sport' }],
+        scheduledRecurring: [
+          {
+            amountMinor: 1_999n,
+            categoryCode: 'sport',
+            recurrence: { kind: 'monthly_day_of_month', dayOfMonth: 31 },
+          },
+        ],
       },
       {
         ...request,

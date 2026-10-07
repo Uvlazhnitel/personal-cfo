@@ -7,10 +7,10 @@ import {
   createMoney,
   createOperationalNeed,
   createRestrictedCash,
-  createScheduledSpending,
   parseLocalDate,
 } from '@personal-cfo/domain';
 import type {
+  CurrencyCode,
   FutureObligation,
   OperationalNeed,
   SpendingNecessity,
@@ -22,14 +22,27 @@ import { DataInvariantError } from './errors.js';
 import { canonicalDatabaseInstant } from './financial-facts.js';
 import { decodeSourceJson, encodeSourceJson } from './json-codec.js';
 import type { DatabaseTransaction } from './owner-lock.js';
-import { planningContexts, settingsVersions } from './schema.js';
+import { planningContexts } from './schema.js';
 import { generateUuidV7 } from './uuid-v7.js';
+
+export type MonthlyDayOfMonthRecurrence = Readonly<{
+  kind: 'monthly_day_of_month';
+  dayOfMonth: number;
+}>;
+
+export type RecurringSpendingDeclaration = Readonly<{
+  id: string;
+  amountMinor: bigint;
+  currency: CurrencyCode;
+  categoryCode: StandardSpendingCategoryCode;
+  recurrence: MonthlyDayOfMonthRecurrence;
+}>;
 
 export type PlanningContextUpdateInput = Readonly<{
   scheduledRecurring: readonly Readonly<{
-    dueDate: string;
     amountMinor: bigint;
     categoryCode: StandardSpendingCategoryCode;
+    recurrence: MonthlyDayOfMonthRecurrence;
   }>[];
   recurringScheduleComplete: boolean;
   operationalNeeds: readonly Readonly<{
@@ -66,42 +79,15 @@ function record(value: unknown, code: string): Readonly<Record<string, unknown>>
   return decoded as Readonly<Record<string, unknown>>;
 }
 
-function addDays(value: string, days: number): string {
-  const date = new Date(`${parseLocalDate(value)}T00:00:00.000Z`);
-  date.setUTCDate(date.getUTCDate() + days);
-  return date.toISOString().slice(0, 10);
-}
-
-function monthlyDates(
-  startExclusive: string,
-  endInclusive: string,
-  day: number,
-): readonly string[] {
-  const dates: string[] = [];
-  const start = new Date(`${startExclusive.slice(0, 7)}-01T00:00:00.000Z`);
-  const end = new Date(`${endInclusive.slice(0, 7)}-01T00:00:00.000Z`);
-  for (
-    let cursor = start;
-    cursor <= end;
-    cursor = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 1))
-  ) {
-    const candidate = `${cursor.getUTCFullYear().toString().padStart(4, '0')}-${(cursor.getUTCMonth() + 1).toString().padStart(2, '0')}-${day.toString().padStart(2, '0')}`;
-    if (candidate > startExclusive && candidate <= endInclusive) dates.push(candidate);
-  }
-  return Object.freeze(dates);
-}
-
 function completeness(complete: boolean, count: number): 'complete' | 'partial' | 'unavailable' {
   return complete ? 'complete' : count > 0 ? 'partial' : 'unavailable';
 }
 
-function liquidityHorizonDays(payload: Readonly<Record<string, unknown>>): number {
-  const liquidity = payload['liquidity'];
-  if (typeof liquidity === 'object' && liquidity !== null && !Array.isArray(liquidity)) {
-    const value = (liquidity as Readonly<Record<string, unknown>>)['unknownIncomeHorizonDays'];
-    if (typeof value === 'number' && Number.isSafeInteger(value) && value > 0) return value;
+function validateMonthlyDay(dayOfMonth: number, code: string): number {
+  if (!Number.isSafeInteger(dayOfMonth) || dayOfMonth < 1 || dayOfMonth > 28) {
+    throw new DataInvariantError(code, 'V1 monthly day must be between 1 and 28.');
   }
-  return 31;
+  return dayOfMonth;
 }
 
 export async function updateCurrentPlanningContext(
@@ -125,13 +111,10 @@ export async function updateCurrentPlanningContext(
       eq(planningContexts.checkpointKey, 'current'),
     ),
   });
-  const settings = await tx.query.settingsVersions.findFirst({
-    where: and(eq(settingsVersions.ownerId, ownerId), eq(settingsVersions.isCurrent, true)),
-  });
-  if (context === undefined || settings === undefined) {
+  if (context === undefined) {
     throw new DataInvariantError(
       'planning_context.current_state_required',
-      'A current planning context and settings version are required.',
+      'A current planning context is required.',
     );
   }
   const current = record(context.payload, 'planning_context.invalid_payload');
@@ -141,15 +124,30 @@ export async function updateCurrentPlanningContext(
     'planning_context.invalid_liquidity_quality',
   );
 
-  const scheduledRecurring = input.scheduledRecurring.map((item, index) => {
-    const category = STANDARD_SPENDING_CATEGORIES[item.categoryCode];
-    return createScheduledSpending({
-      id: generateUuidV7(`scheduled-spending-${index}`) as never,
-      dueDate: parseLocalDate(item.dueDate),
-      amount: createMoney(item.amountMinor, EUR),
-      necessity: category.necessity,
-    });
-  });
+  const recurringSpendingDeclarations: readonly RecurringSpendingDeclaration[] = Object.freeze(
+    input.scheduledRecurring.map((item, index) => {
+      if (STANDARD_SPENDING_CATEGORIES[item.categoryCode] === undefined) {
+        throw new DataInvariantError(
+          'planning_context.invalid_recurring_category',
+          'Recurring spending requires a standard category.',
+        );
+      }
+      createMoney(item.amountMinor, EUR);
+      return Object.freeze({
+        id: generateUuidV7(`recurring-spending-declaration-${index}`),
+        amountMinor: item.amountMinor,
+        currency: EUR,
+        categoryCode: item.categoryCode,
+        recurrence: Object.freeze({
+          kind: 'monthly_day_of_month' as const,
+          dayOfMonth: validateMonthlyDay(
+            item.recurrence.dayOfMonth,
+            'planning_context.invalid_recurring_day',
+          ),
+        }),
+      });
+    }),
+  );
   const operationalNeeds = input.operationalNeeds.map((item, index) =>
     createOperationalNeed({
       id: generateUuidV7(`operational-need-${index}`) as never,
@@ -179,44 +177,31 @@ export async function updateCurrentPlanningContext(
     }),
   );
 
-  const settingsPayload = record(settings.payload, 'planning_context.invalid_settings');
-  const completeThrough = addDays(effectiveDate, liquidityHorizonDays(settingsPayload));
-  const expectedPrimaryPaySchedule =
+  const primaryPaySchedule =
     input.primaryPaySchedule === null
-      ? createExpectedPrimaryPaySchedule({
-          dates: Object.freeze([]),
-          completeThrough: effectiveDate,
-        })
-      : (() => {
-          if (
-            !Number.isSafeInteger(input.primaryPaySchedule.dayOfMonth) ||
-            input.primaryPaySchedule.dayOfMonth < 1 ||
-            input.primaryPaySchedule.dayOfMonth > 28
-          ) {
-            throw new DataInvariantError(
-              'planning_context.invalid_pay_day',
-              'V1 monthly primary-pay day must be between 1 and 28.',
-            );
-          }
-          return createExpectedPrimaryPaySchedule({
-            dates: monthlyDates(
-              effectiveDate,
-              completeThrough,
-              input.primaryPaySchedule.dayOfMonth,
-            ) as never,
-            completeThrough: parseLocalDate(completeThrough),
-          });
-        })();
-  const nextReliableIncomeDate = expectedPrimaryPaySchedule.dates[0] ?? null;
+      ? null
+      : Object.freeze({
+          kind: 'monthly_day_of_month' as const,
+          dayOfMonth: validateMonthlyDay(
+            input.primaryPaySchedule.dayOfMonth,
+            'planning_context.invalid_pay_day',
+          ),
+        });
+  const expectedPrimaryPaySchedule = createExpectedPrimaryPaySchedule({
+    dates: Object.freeze([]),
+    completeThrough: effectiveDate,
+  });
 
   const payload = Object.freeze({
     ...current,
-    scheduledRecurring: Object.freeze(scheduledRecurring),
+    recurringSpendingDeclarations,
+    scheduledRecurring: Object.freeze([]),
     recurringScheduleComplete: input.recurringScheduleComplete,
     operationalNeeds: Object.freeze(operationalNeeds),
     futureObligations: Object.freeze(futureObligations),
     otherRestrictedCash: Object.freeze(otherRestrictedCash),
-    nextReliableIncomeDate,
+    primaryPaySchedule,
+    nextReliableIncomeDate: null,
     expectedPrimaryPaySchedule,
     quality: Object.freeze({
       ...quality,
@@ -243,12 +228,11 @@ export async function updateCurrentPlanningContext(
     entityId: ownerId,
     earliestAffectedAt: asOf,
     result: Object.freeze({
-      scheduledRecurringCount: scheduledRecurring.length,
+      recurringSpendingDeclarationCount: recurringSpendingDeclarations.length,
       operationalNeedsCount: operationalNeeds.length,
       futureObligationsCount: futureObligations.length,
       restrictedCashCount: otherRestrictedCash.length,
-      nextReliableIncomeDate,
-      expectedPrimaryPaySchedule,
+      primaryPaySchedule,
       reason,
     }),
   });

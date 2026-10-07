@@ -348,11 +348,15 @@ suite('owner planning commands', () => {
     ).toMatchObject({ version: 0n });
   });
 
-  it('atomically records explicit completeness and expands monthly salary dates', async () => {
+  it('atomically records durable monthly declarations without canonical facts', async () => {
     const ownerId = await owner('planning-context-owner');
     const request = {
       scheduledRecurring: [
-        { dueDate: '2026-11-03', amountMinor: 1_999n, categoryCode: 'sport' as const },
+        {
+          amountMinor: 1_999n,
+          categoryCode: 'sport' as const,
+          recurrence: { kind: 'monthly_day_of_month' as const, dayOfMonth: 3 },
+        },
       ],
       recurringScheduleComplete: true,
       operationalNeeds: [],
@@ -379,19 +383,22 @@ suite('owner planning commands', () => {
     });
     expect(contextRow).toBeDefined();
     expect(decodeSourceJson(contextRow!.payload)).toMatchObject({
-      scheduledRecurring: [
+      recurringSpendingDeclarations: [
         {
-          dueDate: '2026-11-03',
-          amount: { amountMinor: 1_999n, currency: 'EUR' },
-          necessity: 'discretionary',
+          amountMinor: 1_999n,
+          currency: 'EUR',
+          categoryCode: 'sport',
+          recurrence: { kind: 'monthly_day_of_month', dayOfMonth: 3 },
         },
       ],
+      scheduledRecurring: [],
       recurringScheduleComplete: true,
       operationalNeeds: [],
       futureObligations: [],
       otherRestrictedCash: [],
-      nextReliableIncomeDate: '2026-11-05',
-      expectedPrimaryPaySchedule: { dates: ['2026-11-05'], completeThrough: '2026-11-07' },
+      primaryPaySchedule: { kind: 'monthly_day_of_month', dayOfMonth: 5 },
+      nextReliableIncomeDate: null,
+      expectedPrimaryPaySchedule: { dates: [], completeThrough: '2026-10-07' },
       quality: {
         liquidityInputs: {
           operationalNeeds: 'complete',
@@ -418,6 +425,14 @@ suite('owner planning commands', () => {
         .from(auditEvents)
         .where(eq(auditEvents.commandId, result.commandId)),
     ).toMatchObject([{ eventKind: 'planning_context_update', entityType: 'planning_context' }]);
+    expect(
+      await context.db.query.transactionVersions.findMany({
+        where: eq(transactionVersions.ownerId, ownerId),
+      }),
+    ).toHaveLength(0);
+    expect(
+      await context.db.query.economicFlows.findMany({ where: eq(economicFlows.ownerId, ownerId) }),
+    ).toHaveLength(0);
   });
 
   it('terminalizes only queued or running recalculation records after retry exhaustion', async () => {

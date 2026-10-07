@@ -126,6 +126,29 @@ function requiredRecord(value: unknown, name: string): Record<string, unknown> {
   return value;
 }
 
+function requiredMonthlyDayOfMonth(
+  value: unknown,
+  name: string,
+): Readonly<{ kind: 'monthly_day_of_month'; dayOfMonth: number }> {
+  const recurrence = requiredRecord(value, name);
+  requireOnlyKeys(recurrence, ['kind', 'dayOfMonth']);
+  if (recurrence['kind'] !== 'monthly_day_of_month')
+    throw new DataInvariantError('http.invalid_request', `${name}.kind is invalid.`);
+  const dayOfMonth = recurrence['dayOfMonth'];
+  if (
+    typeof dayOfMonth !== 'number' ||
+    !Number.isSafeInteger(dayOfMonth) ||
+    dayOfMonth < 1 ||
+    dayOfMonth > 28
+  ) {
+    throw new DataInvariantError(
+      'http.invalid_request',
+      `${name}.dayOfMonth must be an integer between 1 and 28.`,
+    );
+  }
+  return Object.freeze({ kind: 'monthly_day_of_month', dayOfMonth });
+}
+
 export function parseSpendingObservationInput(
   value: unknown,
 ): ExistingFlowSpendingObservationInput {
@@ -175,14 +198,17 @@ export function parsePlanningContextUpdateInput(
   const scheduledRecurring = requiredArray(input['scheduledRecurring'], 'scheduledRecurring').map(
     (value, index) => {
       const item = requiredRecord(value, `scheduledRecurring[${index}]`);
-      requireOnlyKeys(item, ['dueDate', 'amountMinor', 'categoryCode']);
+      requireOnlyKeys(item, ['amountMinor', 'categoryCode', 'recurrence']);
       return Object.freeze({
-        dueDate: requiredLocalDate(item['dueDate'], `scheduledRecurring[${index}].dueDate`),
         amountMinor: requiredMinor(item['amountMinor'], `scheduledRecurring[${index}].amountMinor`),
         categoryCode: requiredEnum(
           item['categoryCode'],
           STANDARD_SPENDING_CATEGORY_CODES,
           `scheduledRecurring[${index}].categoryCode`,
+        ),
+        recurrence: requiredMonthlyDayOfMonth(
+          item['recurrence'],
+          `scheduledRecurring[${index}].recurrence`,
         ),
       });
     },
@@ -243,24 +269,7 @@ export function parsePlanningContextUpdateInput(
   if (rawPaySchedule === null) {
     primaryPaySchedule = null;
   } else {
-    const schedule = requiredRecord(rawPaySchedule, 'primaryPaySchedule');
-    requireOnlyKeys(schedule, ['kind', 'dayOfMonth']);
-    if (schedule['kind'] !== 'monthly_day_of_month')
-      throw new DataInvariantError('http.invalid_request', 'primaryPaySchedule.kind is invalid.');
-    if (
-      typeof schedule['dayOfMonth'] !== 'number' ||
-      !Number.isSafeInteger(schedule['dayOfMonth']) ||
-      schedule['dayOfMonth'] < 1 ||
-      schedule['dayOfMonth'] > 28
-    )
-      throw new DataInvariantError(
-        'http.invalid_request',
-        'primaryPaySchedule.dayOfMonth must be an integer between 1 and 28.',
-      );
-    primaryPaySchedule = Object.freeze({
-      kind: schedule['kind'],
-      dayOfMonth: schedule['dayOfMonth'],
-    });
+    primaryPaySchedule = requiredMonthlyDayOfMonth(rawPaySchedule, 'primaryPaySchedule');
   }
   return Object.freeze({
     scheduledRecurring: Object.freeze(scheduledRecurring),
