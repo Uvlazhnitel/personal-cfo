@@ -1,4 +1,4 @@
-import { and, desc, eq } from 'drizzle-orm';
+import { and, desc, eq, inArray } from 'drizzle-orm';
 
 import type { Database } from './database.js';
 import { normalizeSnapshotJson } from './json-codec.js';
@@ -285,4 +285,27 @@ export async function updateRecalculationStatus(
       failureMessage: failure?.message.slice(0, 500) ?? null,
     })
     .where(eq(recalculationRecords.id, requestId));
+}
+
+export async function failRecalculationAfterRetryExhaustion(
+  db: Database,
+  requestId: string,
+  failedAt: string,
+): Promise<boolean> {
+  const updated = await db
+    .update(recalculationRecords)
+    .set({
+      status: 'failed',
+      completedAt: failedAt,
+      failureCategory: 'retry_exhausted',
+      failureMessage: 'Recalculation retries were exhausted.',
+    })
+    .where(
+      and(
+        eq(recalculationRecords.id, requestId),
+        inArray(recalculationRecords.status, ['queued', 'running']),
+      ),
+    )
+    .returning({ id: recalculationRecords.id });
+  return updated.length === 1;
 }

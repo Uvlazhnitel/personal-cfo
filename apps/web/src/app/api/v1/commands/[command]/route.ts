@@ -6,6 +6,7 @@ import {
   appendMaterialitySettingsVersion,
   appendManualSinkingAllocation,
   appendReconciliationResolution,
+  appendExistingFlowSpendingObservation,
   bootstrapCashAccount,
   bootstrapConservativeEvaluationProfile,
   classifyBankTransactionAsExternalFlow,
@@ -13,12 +14,15 @@ import {
   executeFinancialCommand,
   resolveTransferCandidate,
   setDecisionHistoryBoundary,
+  updateCurrentPlanningContext,
 } from '@personal-cfo/data';
 import type {
   EconomicFlowClassification,
   BankExternalFlowClassification,
   MaterialitySettingsInput,
   RecalculationCause,
+  ExistingFlowSpendingObservationInput,
+  PlanningContextUpdateInput,
 } from '@personal-cfo/data';
 import type {
   CashReconciliation,
@@ -26,6 +30,15 @@ import type {
   CanonicalTransaction,
   EconomicFlow,
   SinkingFundAllocation,
+} from '@personal-cfo/domain';
+import {
+  OPERATIONAL_NEED_DIRECTIONS,
+  OPERATIONAL_NEED_STATES,
+  OBLIGATION_PRIORITIES,
+  parseLocalDate,
+  SPENDING_CADENCES,
+  SPENDING_NECESSITIES,
+  STANDARD_SPENDING_CATEGORY_CODES,
 } from '@personal-cfo/domain';
 import { NextResponse } from 'next/server.js';
 import type { NextRequest } from 'next/server.js';
@@ -46,6 +59,8 @@ const COMMANDS = [
   'decision-history-boundary',
   'bank-external-flow',
   'bank-primary-salary',
+  'spending-observation',
+  'planning-context-update',
 ] as const;
 type CommandName = (typeof COMMANDS)[number];
 
@@ -67,6 +82,218 @@ function requireOnlyKeys(value: Record<string, unknown>, allowed: readonly strin
       'classification.identity_field_forbidden',
       `Classification contains unsupported fields: ${unexpected.sort().join(', ')}.`,
     );
+}
+
+function requiredBoolean(value: unknown, name: string): boolean {
+  if (typeof value !== 'boolean')
+    throw new DataInvariantError('http.invalid_request', `${name} must be a boolean.`);
+  return value;
+}
+
+function requiredArray(value: unknown, name: string): readonly unknown[] {
+  if (!Array.isArray(value))
+    throw new DataInvariantError('http.invalid_request', `${name} must be an array.`);
+  return value;
+}
+
+function requiredMinor(value: unknown, name: string, allowZero = false): bigint {
+  if (typeof value !== 'bigint' || (allowZero ? value < 0n : value <= 0n)) {
+    throw new DataInvariantError(
+      'http.invalid_request',
+      `${name} must be ${allowZero ? 'a non-negative' : 'a positive'} minor-unit integer.`,
+    );
+  }
+  return value;
+}
+
+function requiredLocalDate(value: unknown, name: string): string {
+  try {
+    return parseLocalDate(requiredString(value, name));
+  } catch {
+    throw new DataInvariantError('http.invalid_request', `${name} must be a local date.`);
+  }
+}
+
+function requiredEnum<T extends string>(value: unknown, accepted: readonly T[], name: string): T {
+  if (typeof value !== 'string' || !accepted.includes(value as T))
+    throw new DataInvariantError('http.invalid_request', `${name} is invalid.`);
+  return value as T;
+}
+
+function requiredRecord(value: unknown, name: string): Record<string, unknown> {
+  if (!isRecord(value))
+    throw new DataInvariantError('http.invalid_request', `${name} must be an object.`);
+  return value;
+}
+
+function requiredMonthlyDayOfMonth(
+  value: unknown,
+  name: string,
+): Readonly<{ kind: 'monthly_day_of_month'; dayOfMonth: number }> {
+  const recurrence = requiredRecord(value, name);
+  requireOnlyKeys(recurrence, ['kind', 'dayOfMonth']);
+  if (recurrence['kind'] !== 'monthly_day_of_month')
+    throw new DataInvariantError('http.invalid_request', `${name}.kind is invalid.`);
+  const dayOfMonth = recurrence['dayOfMonth'];
+  if (
+    typeof dayOfMonth !== 'number' ||
+    !Number.isSafeInteger(dayOfMonth) ||
+    dayOfMonth < 1 ||
+    dayOfMonth > 28
+  ) {
+    throw new DataInvariantError(
+      'http.invalid_request',
+      `${name}.dayOfMonth must be an integer between 1 and 28.`,
+    );
+  }
+  return Object.freeze({ kind: 'monthly_day_of_month', dayOfMonth });
+}
+
+export function parseSpendingObservationInput(
+  value: unknown,
+): ExistingFlowSpendingObservationInput {
+  const input = requiredRecord(value, 'request');
+  const flowId = requiredString(input['economicFlowId'], 'economicFlowId');
+  const reason = requiredString(input['reason'], 'reason');
+  const hasSemantics =
+    input['categoryCode'] !== undefined ||
+    input['cadence'] !== undefined ||
+    input['irregular'] !== undefined;
+  if (!hasSemantics) {
+    requireOnlyKeys(input, ['economicFlowId', 'reason']);
+    return Object.freeze({ economicFlowId: flowId, reason });
+  }
+  requireOnlyKeys(input, ['economicFlowId', 'categoryCode', 'cadence', 'irregular', 'reason']);
+  return Object.freeze({
+    economicFlowId: flowId,
+    categoryCode: requiredEnum(
+      input['categoryCode'],
+      STANDARD_SPENDING_CATEGORY_CODES,
+      'categoryCode',
+    ),
+    cadence: requiredEnum(input['cadence'], SPENDING_CADENCES, 'cadence'),
+    irregular: requiredBoolean(input['irregular'], 'irregular'),
+    reason,
+  });
+}
+
+export function parsePlanningContextUpdateInput(
+  value: unknown,
+  asOf: string,
+  effectiveDate: string,
+): PlanningContextUpdateInput {
+  const input = requiredRecord(value, 'request');
+  requireOnlyKeys(input, [
+    'scheduledRecurring',
+    'recurringScheduleComplete',
+    'operationalNeeds',
+    'operationalNeedsComplete',
+    'futureObligations',
+    'obligationsComplete',
+    'otherRestrictedCash',
+    'restrictedCashComplete',
+    'primaryPaySchedule',
+    'reason',
+  ]);
+  const scheduledRecurring = requiredArray(input['scheduledRecurring'], 'scheduledRecurring').map(
+    (value, index) => {
+      const item = requiredRecord(value, `scheduledRecurring[${index}]`);
+      requireOnlyKeys(item, ['amountMinor', 'categoryCode', 'recurrence']);
+      return Object.freeze({
+        amountMinor: requiredMinor(item['amountMinor'], `scheduledRecurring[${index}].amountMinor`),
+        categoryCode: requiredEnum(
+          item['categoryCode'],
+          STANDARD_SPENDING_CATEGORY_CODES,
+          `scheduledRecurring[${index}].categoryCode`,
+        ),
+        recurrence: requiredMonthlyDayOfMonth(
+          item['recurrence'],
+          `scheduledRecurring[${index}].recurrence`,
+        ),
+      });
+    },
+  );
+  const operationalNeeds = requiredArray(input['operationalNeeds'], 'operationalNeeds').map(
+    (value, index) => {
+      const item = requiredRecord(value, `operationalNeeds[${index}]`);
+      requireOnlyKeys(item, ['dueDate', 'amountMinor', 'necessity', 'direction', 'state']);
+      return Object.freeze({
+        dueDate: requiredLocalDate(item['dueDate'], `operationalNeeds[${index}].dueDate`),
+        amountMinor: requiredMinor(item['amountMinor'], `operationalNeeds[${index}].amountMinor`),
+        necessity: requiredEnum(
+          item['necessity'],
+          SPENDING_NECESSITIES,
+          `operationalNeeds[${index}].necessity`,
+        ),
+        direction: requiredEnum(
+          item['direction'],
+          OPERATIONAL_NEED_DIRECTIONS,
+          `operationalNeeds[${index}].direction`,
+        ),
+        state: requiredEnum(
+          item['state'],
+          OPERATIONAL_NEED_STATES,
+          `operationalNeeds[${index}].state`,
+        ),
+      });
+    },
+  );
+  const futureObligations = requiredArray(input['futureObligations'], 'futureObligations').map(
+    (value, index) => {
+      const item = requiredRecord(value, `futureObligations[${index}]`);
+      requireOnlyKeys(item, ['dueDate', 'amountMinor', 'priority', 'committed']);
+      return Object.freeze({
+        dueDate: requiredLocalDate(item['dueDate'], `futureObligations[${index}].dueDate`),
+        amountMinor: requiredMinor(item['amountMinor'], `futureObligations[${index}].amountMinor`),
+        priority: requiredEnum(
+          item['priority'],
+          OBLIGATION_PRIORITIES,
+          `futureObligations[${index}].priority`,
+        ),
+        committed: requiredBoolean(item['committed'], `futureObligations[${index}].committed`),
+      });
+    },
+  );
+  const otherRestrictedCash = requiredArray(
+    input['otherRestrictedCash'],
+    'otherRestrictedCash',
+  ).map((value, index) => {
+    const item = requiredRecord(value, `otherRestrictedCash[${index}]`);
+    requireOnlyKeys(item, ['amountMinor']);
+    return Object.freeze({
+      amountMinor: requiredMinor(item['amountMinor'], `otherRestrictedCash[${index}].amountMinor`),
+    });
+  });
+  const rawPaySchedule = input['primaryPaySchedule'];
+  let primaryPaySchedule: PlanningContextUpdateInput['primaryPaySchedule'];
+  if (rawPaySchedule === null) {
+    primaryPaySchedule = null;
+  } else {
+    primaryPaySchedule = requiredMonthlyDayOfMonth(rawPaySchedule, 'primaryPaySchedule');
+  }
+  return Object.freeze({
+    scheduledRecurring: Object.freeze(scheduledRecurring),
+    recurringScheduleComplete: requiredBoolean(
+      input['recurringScheduleComplete'],
+      'recurringScheduleComplete',
+    ),
+    operationalNeeds: Object.freeze(operationalNeeds),
+    operationalNeedsComplete: requiredBoolean(
+      input['operationalNeedsComplete'],
+      'operationalNeedsComplete',
+    ),
+    futureObligations: Object.freeze(futureObligations),
+    obligationsComplete: requiredBoolean(input['obligationsComplete'], 'obligationsComplete'),
+    otherRestrictedCash: Object.freeze(otherRestrictedCash),
+    restrictedCashComplete: requiredBoolean(
+      input['restrictedCashComplete'],
+      'restrictedCashComplete',
+    ),
+    primaryPaySchedule,
+    asOf,
+    effectiveDate,
+    reason: requiredString(input['reason'], 'reason'),
+  });
 }
 
 export function parseClassificationInput(value: unknown): EconomicFlowClassification {
@@ -294,6 +521,10 @@ function commandCause(command: CommandName): RecalculationCause {
       return 'bank_external_flow';
     case 'bank-primary-salary':
       return 'bank_primary_salary';
+    case 'spending-observation':
+      return 'spending_observation';
+    case 'planning-context-update':
+      return 'planning_context_update';
   }
 }
 
@@ -369,6 +600,18 @@ export async function POST(
               now,
               reason: requiredString(raw['reason'], 'reason'),
             });
+          case 'spending-observation':
+            return appendExistingFlowSpendingObservation(
+              tx,
+              session.ownerId,
+              parseSpendingObservationInput(raw),
+            );
+          case 'planning-context-update':
+            return updateCurrentPlanningContext(
+              tx,
+              session.ownerId,
+              parsePlanningContextUpdateInput(raw, now, effectiveDate),
+            );
           case 'transfer-resolution': {
             const resolution = raw['resolution'];
             if (resolution !== 'confirmed_transfer' && resolution !== 'rejected_transfer')

@@ -34,6 +34,8 @@ export const RECALCULATION_CAUSES = [
   'decision_history_boundary',
   'bank_external_flow',
   'bank_primary_salary',
+  'spending_observation',
+  'planning_context_update',
   'manual_recalculate',
 ] as const;
 export type RecalculationCause = (typeof RECALCULATION_CAUSES)[number];
