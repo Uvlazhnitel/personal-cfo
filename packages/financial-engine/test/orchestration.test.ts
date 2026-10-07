@@ -587,6 +587,64 @@ function withHistoricalConsumption(base: FinancialEngineInput): FinancialEngineI
   };
 }
 
+function withUncategorizedSpending(base: FinancialEngineInput): FinancialEngineInput {
+  const consumptionTransactionId = parseTransactionId(uuid(735));
+  const consumptionEffectiveAt = parseInstant('2026-09-05T08:00:00Z');
+  const consumption = createEconomicFlow({
+    id: parseEconomicFlowId(uuid(736)),
+    transactionId: consumptionTransactionId,
+    effectiveAt: consumptionEffectiveAt,
+    amount: money(16_300n),
+    kind: 'consumption',
+    reimbursable: true,
+  });
+  const reimbursementTransactionId = parseTransactionId(uuid(737));
+  const reimbursementEffectiveAt = parseInstant('2026-09-07T08:00:00Z');
+  const reimbursement = createEconomicFlow({
+    id: parseEconomicFlowId(uuid(738)),
+    transactionId: reimbursementTransactionId,
+    effectiveAt: reimbursementEffectiveAt,
+    amount: money(10_000n),
+    kind: 'reimbursement',
+    relatedTransactionId: consumptionTransactionId,
+  });
+  const transaction = (
+    id: typeof consumptionTransactionId,
+    effectiveAt: typeof consumptionEffectiveAt,
+    amountMinor: bigint,
+  ) =>
+    createCanonicalTransaction({
+      id,
+      effectiveAt,
+      bookingStatus: 'booked',
+      kind: 'external_flow',
+      entries: [
+        {
+          id: parseEntryId(uuid(amountMinor < 0n ? 739 : 740)),
+          transactionId: id,
+          accountId: BANK_ID,
+          amount: money(amountMinor),
+          role: 'external_flow',
+        },
+      ],
+    });
+
+  return {
+    ...base,
+    canonical: {
+      ...base.canonical,
+      transactions: [
+        ...base.canonical.transactions,
+        transaction(consumptionTransactionId, consumptionEffectiveAt, -16_300n),
+        transaction(reimbursementTransactionId, reimbursementEffectiveAt, 10_000n),
+      ],
+      economicFlows: [...base.canonical.economicFlows, consumption, reimbursement],
+      spendingObservations: [],
+      ambiguities: [],
+    },
+  };
+}
+
 function withHistoricalSinkingAllocation(base: FinancialEngineInput): FinancialEngineInput {
   const fund = createSinkingFund({
     id: parseSinkingFundId(uuid(740)),
@@ -809,6 +867,36 @@ describe('financial state orchestration', () => {
       withSinking.historicalInvestmentCapacity.value!.observations[0]!
         .preClosingRecommendedSafeToInvest!.amountMinor,
     ).toBe(baseFirst - 50_000n);
+  });
+
+  it('evaluates CCR independently while uncategorized spending keeps liquidity fail-closed', () => {
+    const source = withUncategorizedSpending(inputWithSalaryHistory());
+    const result = evaluateFinancialState(source);
+
+    expect(source.canonical.spendingObservations).toEqual([]);
+    expect(result.ccr.status).toBe('complete');
+    expect(result.ccr.value?.recognizedIncome.amountMinor).toBe(300_000n);
+    expect(result.spendingBaseline).toMatchObject({
+      status: 'unavailable',
+      value: null,
+      warnings: [
+        {
+          code: 'baseline.missing_spending_observation',
+          context: { count: '2' },
+        },
+      ],
+    });
+    expect(result.liquidityReserve.status).toBe('unavailable');
+    expect(result.liquidityReserve.warnings.map((item) => item.code)).toEqual([
+      'baseline.missing_spending_observation',
+      'liquidity.missing_required_input',
+    ]);
+    expect(result.investabilityReadiness).toEqual({
+      kind: 'blocked',
+      reasons: ['incomplete_spending_baseline', 'other_material_incompleteness'],
+    });
+    expect(result.safeToInvest.status).toBe('unavailable');
+    expect(result.safeToInvest.value).toBeNull();
   });
 
   it('cannot hide canonical material ambiguity from historical capacity', () => {
