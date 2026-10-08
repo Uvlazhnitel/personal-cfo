@@ -13,6 +13,7 @@ import {
   classifyBankTransactionAsExternalFlow,
   classifyBankTransactionAsPrimarySalary,
   executeFinancialCommand,
+  normalizeSnapshotJson,
   resolveTransferCandidate,
   setDecisionHistoryBoundary,
   updateCurrentPlanningContext,
@@ -579,8 +580,8 @@ export function serializeCommandResponse(
     inputVersion: bigint;
     result: Readonly<Record<string, unknown>>;
   }>,
-): Readonly<Record<string, unknown>> {
-  return Object.freeze({ ...value, inputVersion: value.inputVersion.toString() });
+): ReturnType<typeof normalizeSnapshotJson> {
+  return normalizeSnapshotJson(value);
 }
 
 export async function POST(

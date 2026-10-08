@@ -264,15 +264,80 @@ describe('materiality settings command request', () => {
     ).toThrow(expect.objectContaining({ code }));
   });
 
-  it('serializes the command input version as a JSON-safe decimal string', () => {
+  it('recursively serializes a command response without losing bigint precision', () => {
     const response = serializeCommandResponse({
       commandId: '018f0000-0000-7000-8000-000000000001',
       replayed: false,
       mutated: true,
       inputVersion: 9_007_199_254_740_993n,
-      result: Object.freeze({ accepted: true }),
+      result: Object.freeze({
+        accepted: true,
+        unchanged: false,
+        note: 'owner-confirmed',
+        optional: null,
+        attempts: 1,
+        provisionalBaseline: Object.freeze({
+          normal: Object.freeze({ amountMinor: 60_000n, currency: 'EUR' }),
+          essential: Object.freeze({ amountMinor: 30_000n, currency: 'EUR' }),
+          provenance: Object.freeze({
+            cashAllowance: Object.freeze({ amountMinor: 20_000n, currency: 'EUR' }),
+          }),
+        }),
+        nestedAmounts: Object.freeze([
+          Object.freeze({ amountMinor: 9_007_199_254_740_993n }),
+          Object.freeze([1n, 2n]),
+        ]),
+      }),
     });
-    expect(response).toMatchObject({ inputVersion: '9007199254740993' });
+
+    expect(response).toEqual({
+      commandId: '018f0000-0000-7000-8000-000000000001',
+      inputVersion: '9007199254740993',
+      mutated: true,
+      replayed: false,
+      result: {
+        accepted: true,
+        attempts: 1,
+        nestedAmounts: [{ amountMinor: '9007199254740993' }, ['1', '2']],
+        note: 'owner-confirmed',
+        optional: null,
+        provisionalBaseline: {
+          essential: { amountMinor: '30000', currency: 'EUR' },
+          normal: { amountMinor: '60000', currency: 'EUR' },
+          provenance: {
+            cashAllowance: { amountMinor: '20000', currency: 'EUR' },
+          },
+        },
+        unchanged: false,
+      },
+    });
+    expect(() => JSON.stringify(response)).not.toThrow();
+  });
+
+  it('recursively serializes replayed command results', () => {
+    const response = serializeCommandResponse({
+      commandId: '018f0000-0000-7000-8000-000000000002',
+      replayed: true,
+      mutated: true,
+      inputVersion: 34n,
+      result: Object.freeze({
+        provisionalBaseline: Object.freeze({
+          normal: Object.freeze({ amountMinor: 60_000n, currency: 'EUR' }),
+        }),
+      }),
+    });
+
+    expect(response).toEqual({
+      commandId: '018f0000-0000-7000-8000-000000000002',
+      inputVersion: '34',
+      mutated: true,
+      replayed: true,
+      result: {
+        provisionalBaseline: {
+          normal: { amountMinor: '60000', currency: 'EUR' },
+        },
+      },
+    });
     expect(() => JSON.stringify(response)).not.toThrow();
   });
 });
