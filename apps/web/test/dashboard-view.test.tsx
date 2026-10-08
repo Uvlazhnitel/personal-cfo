@@ -89,6 +89,28 @@ describe('mobile dashboard presentation', () => {
     expect(html).not.toContain('€0');
   });
 
+  it('renders an explicitly labelled provisional Safe to Invest value', () => {
+    const original = overview();
+    const html = renderToStaticMarkup(
+      createElement(DashboardView, {
+        overview: {
+          ...original,
+          metrics: {
+            ...original.metrics,
+            safeToInvest: {
+              state: 'incomplete',
+              value: money(24_000n),
+              asOf: '2026-10-08T08:00:00.000Z',
+              reason: 'provisional_estimate',
+            },
+          },
+        },
+      }),
+    );
+    expect(html).toContain('€240');
+    expect(html).toContain('Conservative provisional estimate');
+  });
+
   it('publishes a standalone manifest without offline infrastructure', () => {
     expect(manifest()).toMatchObject({
       name: 'Personal CFO',

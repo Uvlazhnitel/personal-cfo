@@ -4,6 +4,7 @@ import {
   appendCashReconciliation,
   appendClassificationCorrection,
   appendMaterialitySettingsVersion,
+  appendProvisionalBaselineSettingsVersion,
   appendManualSinkingAllocation,
   appendReconciliationResolution,
   appendExistingFlowSpendingObservation,
@@ -20,6 +21,7 @@ import type {
   EconomicFlowClassification,
   BankExternalFlowClassification,
   MaterialitySettingsInput,
+  ProvisionalBaselineSettingsInput,
   RecalculationCause,
   ExistingFlowSpendingObservationInput,
   PlanningContextUpdateInput,
@@ -54,6 +56,7 @@ const COMMANDS = [
   'cash-reconciliation',
   'cash-reconciliation-resolution',
   'settings-materiality',
+  'settings-provisional-baseline',
   'engine-profile-bootstrap',
   'cash-account-bootstrap',
   'decision-history-boundary',
@@ -406,6 +409,45 @@ export function parseMaterialitySettingsInput(
   });
 }
 
+export function parseProvisionalBaselineSettingsInput(
+  value: unknown,
+  effectiveAt: string,
+  effectiveDate: string,
+): Readonly<ProvisionalBaselineSettingsInput & { reason: string }> {
+  const input = requiredRecord(value, 'request');
+  requireOnlyKeys(input, ['normal', 'essential', 'cashAllowance', 'historyStart', 'reason']);
+  const amount = (key: 'normal' | 'essential' | 'cashAllowance'): bigint => {
+    const item = requiredRecord(input[key], key);
+    requireOnlyKeys(item, ['amountMinor']);
+    return requiredMinor(item['amountMinor'], `${key}.amountMinor`, true);
+  };
+  const normalAmountMinor = amount('normal');
+  const essentialAmountMinor = amount('essential');
+  const cashAllowanceAmountMinor = amount('cashAllowance');
+  const historyStart = requiredLocalDate(input['historyStart'], 'historyStart');
+  if (essentialAmountMinor > normalAmountMinor || cashAllowanceAmountMinor > normalAmountMinor) {
+    throw new DataInvariantError(
+      'settings.invalid_provisional_baseline',
+      'Essential and cash allowance amounts must not exceed the normal baseline.',
+    );
+  }
+  if (historyStart > effectiveDate) {
+    throw new DataInvariantError(
+      'settings.invalid_provisional_history_start',
+      'History start must not be later than the effective date.',
+    );
+  }
+  return Object.freeze({
+    normalAmountMinor,
+    essentialAmountMinor,
+    cashAllowanceAmountMinor,
+    historyStart,
+    effectiveAt,
+    effectiveDate,
+    reason: requiredString(input['reason'], 'reason'),
+  });
+}
+
 export function parseEvaluationProfileBootstrapInput(value: unknown): Readonly<{ reason: string }> {
   if (!isRecord(value))
     throw new DataInvariantError('http.invalid_request', 'Request body must be an object.');
@@ -510,6 +552,7 @@ function commandCause(command: CommandName): RecalculationCause {
     case 'cash-reconciliation-resolution':
       return 'cash_reconciliation_resolution';
     case 'settings-materiality':
+    case 'settings-provisional-baseline':
       return 'settings_change';
     case 'engine-profile-bootstrap':
       return 'engine_profile_bootstrap';
@@ -650,6 +693,10 @@ export async function POST(
           case 'settings-materiality': {
             const settings = parseMaterialitySettingsInput(raw, now, effectiveDate);
             return appendMaterialitySettingsVersion(tx, session.ownerId, settings);
+          }
+          case 'settings-provisional-baseline': {
+            const settings = parseProvisionalBaselineSettingsInput(raw, now, effectiveDate);
+            return appendProvisionalBaselineSettingsVersion(tx, session.ownerId, settings);
           }
           case 'engine-profile-bootstrap': {
             const bootstrap = parseEvaluationProfileBootstrapInput(raw);

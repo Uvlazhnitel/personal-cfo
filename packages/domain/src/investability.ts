@@ -4,6 +4,7 @@ import { parseStringEnum } from './validation.js';
 export const PROVISIONAL_INVESTABILITY_REASONS = [
   'non_material_unresolved_transfer',
   'non_material_cash_variance',
+  'non_material_spending_history_incomplete',
 ] as const;
 export type ProvisionalInvestabilityReason = (typeof PROVISIONAL_INVESTABILITY_REASONS)[number];
 

@@ -8,6 +8,7 @@ import {
   createScheduledSpending,
   createSpendingObservation,
   parseInstant,
+  parseLocalDate,
   parseYearMonth,
   yearMonthOf,
 } from '@personal-cfo/domain';
@@ -23,6 +24,7 @@ import type {
   ScheduledSpending,
   SpendingCategoryId,
   SpendingObservation,
+  LocalDate,
   YearMonth,
 } from '@personal-cfo/domain';
 
@@ -30,6 +32,13 @@ import { FinancialEngineInvariantError } from './errors.js';
 import { median, multiplyFractionHalfEven, nearestRank } from './exact-math.js';
 import { priorYearMonths } from './local-calendar.js';
 import type { FundedConsumptionCoverage } from './sinking-funds.js';
+
+export type SpendingBaselineFallbackProvenance = Readonly<{
+  source: 'owner_confirmed_history_estimate';
+  confidence: 'provisional';
+  historyStart: LocalDate;
+  cashAllowance: Money;
+}>;
 
 export type SpendingBaselineSettings = Readonly<{
   baselineWindowMonths: number;
@@ -41,6 +50,7 @@ export type SpendingBaselineSettings = Readonly<{
   seasonalityCap: ExactFraction;
   fallbackNormalBaseline: Money | null;
   fallbackEssentialBaseline: Money | null;
+  fallbackProvenance: SpendingBaselineFallbackProvenance | null;
 }>;
 
 export type SpendingBaseline = Readonly<{
@@ -58,6 +68,7 @@ export type SpendingBaseline = Readonly<{
   historicalWindowUsed: readonly YearMonth[];
   seasonalAdjustment: ExactFraction | null;
   source: 'historical' | 'fallback';
+  fallbackProvenance: SpendingBaselineFallbackProvenance | null;
 }>;
 
 export type SpendingBaselineInput = Readonly<{
@@ -157,6 +168,18 @@ function validateSettings(settings: SpendingBaselineSettings): SpendingBaselineS
           settings.fallbackEssentialBaseline.amountMinor,
           settings.fallbackEssentialBaseline.currency,
         );
+  const fallbackProvenance =
+    settings.fallbackProvenance === null
+      ? null
+      : Object.freeze({
+          source: settings.fallbackProvenance.source,
+          confidence: settings.fallbackProvenance.confidence,
+          historyStart: parseLocalDate(settings.fallbackProvenance.historyStart),
+          cashAllowance: createMoney(
+            settings.fallbackProvenance.cashAllowance.amountMinor,
+            settings.fallbackProvenance.cashAllowance.currency,
+          ),
+        });
   if (
     (fallbackNormal !== null &&
       (fallbackNormal.currency !== EUR || fallbackNormal.amountMinor < 0n)) ||
@@ -164,7 +187,15 @@ function validateSettings(settings: SpendingBaselineSettings): SpendingBaselineS
       (fallbackEssential.currency !== EUR || fallbackEssential.amountMinor < 0n)) ||
     (fallbackNormal !== null &&
       fallbackEssential !== null &&
-      fallbackEssential.amountMinor > fallbackNormal.amountMinor)
+      fallbackEssential.amountMinor > fallbackNormal.amountMinor) ||
+    (fallbackProvenance !== null &&
+      (fallbackProvenance.source !== 'owner_confirmed_history_estimate' ||
+        fallbackProvenance.confidence !== 'provisional' ||
+        fallbackProvenance.cashAllowance.currency !== EUR ||
+        fallbackProvenance.cashAllowance.amountMinor < 0n ||
+        fallbackNormal === null ||
+        fallbackEssential === null ||
+        fallbackProvenance.cashAllowance.amountMinor > fallbackNormal.amountMinor))
   ) {
     throw new FinancialEngineInvariantError(
       'baseline.invalid_fallback',
@@ -178,6 +209,7 @@ function validateSettings(settings: SpendingBaselineSettings): SpendingBaselineS
     seasonalityCap,
     fallbackNormalBaseline: fallbackNormal,
     fallbackEssentialBaseline: fallbackEssential,
+    fallbackProvenance,
   });
 }
 
@@ -698,9 +730,11 @@ export function calculateSpendingBaseline(
     warnings.push(warning('baseline.insufficient_variability_sample'));
     const fallbackNormal = settings.fallbackNormalBaseline;
     const fallbackEssential = settings.fallbackEssentialBaseline;
+    const fallbackProvenance = settings.fallbackProvenance;
     if (
       fallbackNormal === null ||
       fallbackEssential === null ||
+      fallbackProvenance === null ||
       fallbackNormal.amountMinor < recurringNormal ||
       fallbackEssential.amountMinor < recurringEssential
     ) {
@@ -727,7 +761,16 @@ export function calculateSpendingBaseline(
       historicalWindowUsed: Object.freeze([...completeMonths]),
       seasonalAdjustment: null,
       source: 'fallback' as const,
+      fallbackProvenance,
     });
+    warnings.push(
+      warning('baseline.provisional_fallback', {
+        source: fallbackProvenance.source,
+        confidence: fallbackProvenance.confidence,
+        historyStart: fallbackProvenance.historyStart,
+        cashAllowanceMinor: fallbackProvenance.cashAllowance.amountMinor.toString(),
+      }),
+    );
     return createMetricResult({
       ...base,
       status: 'partial',
@@ -835,6 +878,7 @@ export function calculateSpendingBaseline(
     historicalWindowUsed: Object.freeze([...completeMonths]),
     seasonalAdjustment: factor,
     source: 'historical' as const,
+    fallbackProvenance: null,
   });
   if (value.essentialBaseline.amountMinor > value.normalBaseline.amountMinor) {
     throw new FinancialEngineInvariantError(

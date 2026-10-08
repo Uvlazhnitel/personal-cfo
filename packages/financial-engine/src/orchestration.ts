@@ -45,6 +45,7 @@ import type {
   SinkingFund,
   SinkingFundAllocation,
   SpendingObservation,
+  YearMonth,
 } from '@personal-cfo/domain';
 
 import type {
@@ -628,18 +629,51 @@ export function deriveInvestabilityReadiness(
     liquidity: MetricResult<LiquidityReserve>;
     quality: CheckpointQuality;
     nextReliableIncomeDate: LocalDate | null;
+    effectiveDate: LocalDate;
+    monthCoverage: readonly CalendarMonthCoverage[];
     ambiguities: readonly FlowAmbiguity[];
     cashReconciliations: readonly CashReconciliation[];
   }>,
 ): InvestabilityReadiness {
   const blockers: string[] = [];
   const provisional: string[] = [];
+  const fallbackProvenance = input.baseline.value?.fallbackProvenance ?? null;
+  const targetMonth = yearMonthOf(input.effectiveDate);
+  const coverageByMonth = new Map(input.monthCoverage.map((item) => [item.month, item]));
+  const expectedMonths: YearMonth[] = [];
+  if (fallbackProvenance !== null) {
+    for (
+      let month = yearMonthOf(fallbackProvenance.historyStart);
+      month < targetMonth;
+      month = addYearMonths(month, 1)
+    ) {
+      expectedMonths.push(month);
+    }
+  }
+  const evidenceMonths = expectedMonths.map((month) => coverageByMonth.get(month));
+  const acceptedFallback =
+    input.baseline.status === 'partial' &&
+    input.baseline.value?.source === 'fallback' &&
+    fallbackProvenance?.source === 'owner_confirmed_history_estimate' &&
+    fallbackProvenance.confidence === 'provisional' &&
+    expectedMonths.length > 0 &&
+    evidenceMonths.every(
+      (item) =>
+        item !== undefined && item.reconciled && item.materialAmbiguityFree && item.fxComplete,
+    ) &&
+    evidenceMonths.some((item) => item?.spendingClassificationComplete === false) &&
+    input.quality.spendingClassification === 'partial' &&
+    input.ambiguities.length > 0 &&
+    input.ambiguities.every(
+      (item) => item.kind === 'unclassified_external_flow' && item.materiality === 'non_material',
+    );
   if (
     input.positions.liquidCash.status !== 'complete' ||
     input.quality.liquidBalance !== 'complete'
   )
     blockers.push('incomplete_liquid_balance');
-  if (input.baseline.status !== 'complete') blockers.push('incomplete_spending_baseline');
+  if (input.baseline.status !== 'complete' && !acceptedFallback)
+    blockers.push('incomplete_spending_baseline');
   if (input.quality.liquidityInputs.obligations !== 'complete')
     blockers.push('incomplete_obligations');
   if (
@@ -650,9 +684,14 @@ export function deriveInvestabilityReadiness(
     blockers.push('incomplete_sinking_protection');
   if (input.nextReliableIncomeDate === null) blockers.push('unknown_next_reliable_income');
   if (
-    input.liquidity.status !== 'complete' ||
+    (input.liquidity.status !== 'complete' &&
+      !(
+        acceptedFallback &&
+        input.liquidity.status === 'partial' &&
+        input.liquidity.value !== null
+      )) ||
     input.quality.liquidityInputs.operationalNeeds !== 'complete' ||
-    input.quality.spendingClassification !== 'complete'
+    (input.quality.spendingClassification !== 'complete' && !acceptedFallback)
   )
     blockers.push('other_material_incompleteness');
   for (const ambiguity of input.ambiguities.map((item) => createFlowAmbiguity(item))) {
@@ -662,6 +701,12 @@ export function deriveInvestabilityReadiness(
           ? 'material_unresolved_transfer'
           : 'non_material_unresolved_transfer',
       );
+    } else if (
+      ambiguity.kind === 'unclassified_external_flow' &&
+      ambiguity.materiality === 'non_material' &&
+      acceptedFallback
+    ) {
+      provisional.push('non_material_spending_history_incomplete');
     } else {
       blockers.push('other_material_incompleteness');
     }
@@ -778,6 +823,8 @@ function calculateCheckpoint(
     liquidity,
     quality: facts.quality,
     nextReliableIncomeDate: facts.nextReliableIncomeDate,
+    effectiveDate,
+    monthCoverage: facts.monthCoverage,
     ambiguities: variables.ambiguities,
     cashReconciliations: variables.cashReconciliations,
   });

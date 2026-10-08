@@ -7,11 +7,52 @@ import {
   parseDecisionHistoryBoundaryInput,
   parseEvaluationProfileBootstrapInput,
   parseMaterialitySettingsInput,
+  parseProvisionalBaselineSettingsInput,
   parsePlanningContextUpdateInput,
   parseSpendingObservationInput,
   reviveMoney,
   serializeCommandResponse,
 } from '../src/app/api/v1/commands/[command]/route.js';
+
+describe('provisional baseline settings request', () => {
+  const request = {
+    normal: { amountMinor: 60_000n },
+    essential: { amountMinor: 30_000n },
+    cashAllowance: { amountMinor: 20_000n },
+    historyStart: '2026-07-01',
+    reason: 'Owner confirmed reviewed history estimate.',
+  } as const;
+
+  it('accepts exact owner amounts while deriving currency and provenance server-side', () => {
+    expect(
+      parseProvisionalBaselineSettingsInput(request, '2026-10-08T08:00:00.000Z', '2026-10-08'),
+    ).toEqual({
+      normalAmountMinor: 60_000n,
+      essentialAmountMinor: 30_000n,
+      cashAllowanceAmountMinor: 20_000n,
+      historyStart: '2026-07-01',
+      effectiveAt: '2026-10-08T08:00:00.000Z',
+      effectiveDate: '2026-10-08',
+      reason: 'Owner confirmed reviewed history estimate.',
+    });
+  });
+
+  it.each([
+    { ...request, ownerId: 'forbidden' },
+    { ...request, currency: 'EUR' },
+    { ...request, source: 'owner_confirmed_history_estimate' },
+    { ...request, confidence: 'provisional' },
+    { ...request, spendingClassificationComplete: true },
+    { ...request, normal: { amountMinor: -1n } },
+    { ...request, essential: { amountMinor: 60_001n } },
+    { ...request, cashAllowance: { amountMinor: 60_001n } },
+    { ...request, historyStart: '2026-10-09' },
+  ])('rejects unsupported or malformed caller-controlled fields %#', (value) => {
+    expect(() =>
+      parseProvisionalBaselineSettingsInput(value, '2026-10-08T08:00:00.000Z', '2026-10-08'),
+    ).toThrow();
+  });
+});
 
 describe('spending observation request', () => {
   it('accepts explicit consumption semantics and a semantics-free linked reversal', () => {

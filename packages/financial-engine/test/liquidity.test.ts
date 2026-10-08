@@ -67,6 +67,7 @@ function baseline(overrides: Partial<SpendingBaseline> = {}): SpendingBaseline {
     historicalWindowUsed: [parseYearMonth('2025-08')],
     seasonalAdjustment: null,
     source: 'historical',
+    fallbackProvenance: null,
     ...overrides,
   });
 }
