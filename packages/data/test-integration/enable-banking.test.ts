@@ -10,6 +10,12 @@ import type { EnableBankingConfiguration } from '../../../apps/worker/src/enable
 import { ENABLE_BANKING_CONTRACT_FIXTURES } from '../../integrations/src/open-banking/enable-banking/index.js';
 import {
   accounts,
+  auditEvents,
+  commandRecords,
+  financialTransactions,
+  transactionVersions,
+  flowAmbiguities,
+  enableBankingRuns,
   accountBalanceSnapshots,
   accountEntries,
   activateEnableBankingSession,
@@ -366,6 +372,55 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         where: eq(enableBankingProviderAccounts.ownerId, ownerId),
       });
       expect(providerAccount?.transactionIdentityVerifiedAt).toBeNull();
+      // Simulate migrated legacy timestamps: they cannot substitute for completed-run proof.
+      await context.db.update(enableBankingSourceRevisions).set({
+        firstCompletedRunId: null,
+        replayCompletedRunId: null,
+      });
+      await context.db
+        .update(enableBankingProviderAccounts)
+        .set({
+          transactionIdentityVerifiedAt: '2026-09-25T09:15:00Z',
+        })
+        .where(eq(enableBankingProviderAccounts.id, providerAccount!.id));
+      expect(
+        (await loadEnableBankingActivationReadiness(context.db, ownerId, true)).unmet,
+      ).toContain('transaction_identity_unverified');
+      const failedQueue = bodies();
+      failedQueue[3] = '{invalid synthetic JSON';
+      await expect(
+        executeEnableBankingSync(context.db, boss, configuration, {
+          canonicalImportEnabled: false,
+          clock: { now: () => new Date('2026-09-25T09:16:00Z') },
+          fetchImplementation: vi.fn(() => Promise.resolve(response(failedQueue.shift()))),
+        }),
+      ).rejects.toBeDefined();
+      expect(
+        (await loadEnableBankingActivationReadiness(context.db, ownerId, true)).unmet,
+      ).toContain('transaction_identity_unverified');
+      expect(
+        (await context.db.select().from(enableBankingSourceRevisions)).every(
+          (revision) =>
+            revision.firstCompletedRunId === null && revision.replayCompletedRunId === null,
+        ),
+      ).toBe(true);
+      const duplicateQueue = bodies();
+      const duplicateFirst = duplicateQueue[2] as { transactions: unknown[] };
+      const duplicateFinal = duplicateQueue[3] as { transactions: unknown[] };
+      duplicateFinal.transactions.push(duplicateFirst.transactions[0]);
+      await executeEnableBankingSync(context.db, boss, configuration, {
+        canonicalImportEnabled: false,
+        clock: { now: () => new Date('2026-09-25T09:17:00Z') },
+        fetchImplementation: vi.fn(() => Promise.resolve(response(duplicateQueue.shift()))),
+      });
+      expect(
+        (await loadEnableBankingActivationReadiness(context.db, ownerId, true)).unmet,
+      ).toContain('transaction_identity_unverified');
+      expect(
+        (await context.db.select().from(enableBankingSourceRevisions)).every(
+          (revision) => revision.replayCompletedRunId === null,
+        ),
+      ).toBe(true);
       const proofQueue = bodies();
       const proof = await executeEnableBankingSync(context.db, boss, configuration, {
         canonicalImportEnabled: true,
@@ -406,6 +461,43 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         balanceBoundaryAt: '2026-08-31T21:00:00.000Z',
         statementSha256: 'a'.repeat(64),
       };
+      const provenRevisions = await context.db.select().from(enableBankingSourceRevisions);
+      await context.db.update(enableBankingSourceRevisions).set({ replayCompletedRunId: null });
+      expect(
+        (
+          await prepareEnableBankingActivation(
+            context.db,
+            ownerId,
+            evidence,
+            '2026-09-25T09:19:00Z',
+          )
+        ).blockers,
+      ).toContain('account_not_ready');
+      await expect(
+        executeEnableBankingInitialActivation(context.db, boss, {
+          ownerId,
+          evidence,
+          expectedPlanFingerprint: 'f'.repeat(64),
+          confirmation: 'ACTIVATE_CANONICAL_IMPORT',
+          now: '2026-09-25T09:19:00Z',
+        }),
+      ).rejects.toMatchObject({ code: 'enable_banking.activation_plan_blocked' });
+      expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toEqual([]);
+      expect(await context.db.select().from(enableBankingCanonicalImports)).toEqual([]);
+      expect(await context.db.select().from(commandRecords)).toEqual([]);
+      for (const revision of provenRevisions) {
+        await context.db
+          .update(enableBankingSourceRevisions)
+          .set({ replayCompletedRunId: revision.replayCompletedRunId })
+          .where(
+            and(
+              eq(enableBankingSourceRevisions.ownerId, ownerId),
+              eq(enableBankingSourceRevisions.connectionId, revision.connectionId),
+              eq(enableBankingSourceRevisions.sourceKey, revision.sourceKey),
+              eq(enableBankingSourceRevisions.revisionSha256, revision.revisionSha256),
+            ),
+          );
+      }
       const missingSettingsPlan = await prepareEnableBankingActivation(
         context.db,
         ownerId,
@@ -438,6 +530,111 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         pendingCount: 0,
         expectedCanonicalTransactions: 6,
       });
+      const selectedCoverage = await context.db.select().from(enableBankingHistoryCoverage);
+      const coverageId = selectedCoverage[0]!.id;
+      const originalCoverage = selectedCoverage[0]!;
+      // Owner-wide historical coverage still exists, but cannot satisfy activation.
+      await context.db.update(enableBankingHistoryCoverage).set({
+        sessionGeneration: '018f0000-0000-7000-8000-000000000f01',
+      });
+      expect(
+        await loadMergedEnableBankingCoverage(context.db, ownerId, '2026-09-25T09:19:00Z'),
+      ).toHaveLength(1);
+      expect(
+        (
+          await prepareEnableBankingActivation(
+            context.db,
+            ownerId,
+            evidence,
+            '2026-09-25T09:19:00Z',
+          )
+        ).blockers,
+      ).toContain('history_coverage_incomplete');
+      await context.db
+        .update(enableBankingHistoryCoverage)
+        .set({ sessionGeneration: originalCoverage.sessionGeneration });
+      const otherProviderAccountId = '018f0000-0000-7000-8000-000000000f02';
+      await context.db.insert(enableBankingProviderAccounts).values({
+        id: otherProviderAccountId,
+        ownerId,
+        connectionId: providerAccount!.connectionId,
+        stableAccountKey: 'synthetic-other-account',
+        currency: 'EUR',
+        identificationHashCiphertext: 'synthetic',
+        identificationHashIv: 'synthetic',
+        identificationHashAuthTag: 'synthetic',
+        observedAt: '2026-09-25T09:19:00Z',
+        updatedAt: '2026-09-25T09:19:00Z',
+      });
+      await context.db
+        .update(enableBankingHistoryCoverage)
+        .set({ providerAccountId: otherProviderAccountId });
+      expect(
+        (
+          await prepareEnableBankingActivation(
+            context.db,
+            ownerId,
+            evidence,
+            '2026-09-25T09:19:00Z',
+          )
+        ).blockers,
+      ).toContain('history_coverage_incomplete');
+      await context.db
+        .update(enableBankingHistoryCoverage)
+        .set({ providerAccountId: providerAccount!.id });
+      const coverageRunIds = selectedCoverage.map((row) => row.runId);
+      for (const runId of coverageRunIds) {
+        await context.db
+          .update(enableBankingRuns)
+          .set({ status: 'failed' })
+          .where(eq(enableBankingRuns.id, runId));
+      }
+      expect(
+        (
+          await prepareEnableBankingActivation(
+            context.db,
+            ownerId,
+            evidence,
+            '2026-09-25T09:19:00Z',
+          )
+        ).blockers,
+      ).toContain('history_coverage_incomplete');
+      for (const runId of coverageRunIds) {
+        await context.db
+          .update(enableBankingRuns)
+          .set({ status: 'completed' })
+          .where(eq(enableBankingRuns.id, runId));
+      }
+      expect(
+        (
+          await context.db.query.enableBankingHistoryCoverage.findFirst({
+            where: eq(enableBankingHistoryCoverage.id, coverageId),
+          })
+        )?.sessionGeneration,
+      ).toBe(originalCoverage.sessionGeneration);
+      // CLBD arriving later at the same cutoff must not override ITBD.
+      const closingBalanceId = '018f0000-0000-7000-8000-000000000f03';
+      await context.db.insert(enableBankingBalanceObservations).values({
+        ...bookedBalance!,
+        id: closingBalanceId,
+        balanceKind: 'closing_booked',
+        revisionSha256: 'c'.repeat(64),
+        amountMinor: bookedBalance!.amountMinor + 1n,
+        sourceAsOf: '2026-09-25T12:00:00Z',
+        observedAt: '2026-09-25T09:19:00Z',
+      });
+      const tiedPlan = await prepareEnableBankingActivation(
+        context.db,
+        ownerId,
+        evidence,
+        '2026-09-25T09:19:00Z',
+      );
+      expect(tiedPlan.ready).toBe(true);
+      expect(tiedPlan.providerBalanceRevisionSha256).toBe(bookedBalance!.revisionSha256);
+      expect(tiedPlan.planFingerprint).toBe(plan.planFingerprint);
+      await context.db
+        .delete(enableBankingBalanceObservations)
+        .where(eq(enableBankingBalanceObservations.id, closingBalanceId));
       const mismatched = await prepareEnableBankingActivation(
         context.db,
         ownerId,
@@ -460,6 +657,83 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       ).rejects.toMatchObject({ code: 'enable_banking.activation_plan_stale' });
       expect(await context.db.select().from(enableBankingCanonicalImports)).toEqual([]);
       expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toEqual([]);
+      const activationInput = {
+        ownerId,
+        evidence,
+        expectedPlanFingerprint: plan.planFingerprint,
+        confirmation: 'ACTIVATE_CANONICAL_IMPORT' as const,
+        now: '2026-09-25T09:20:00Z',
+      };
+      const stateBeforeActivation = async () => ({
+        transactions: await context.db.select().from(financialTransactions),
+        versions: await context.db.select().from(transactionVersions),
+        entries: await context.db.select().from(accountEntries),
+        imports: await context.db.select().from(enableBankingCanonicalImports),
+        opening: await context.db.select().from(enableBankingOpeningBalanceEvidence),
+        ambiguities: await context.db.select().from(flowAmbiguities),
+        reconciliations: await context.db.select().from(enableBankingBalanceReconciliations),
+        snapshots: await context.db.select().from(accountBalanceSnapshots),
+        commands: await context.db.select().from(commandRecords),
+        audit: await context.db.select().from(auditEvents),
+        input: await context.db.select().from(ownerInputVersions),
+        recalculations: await context.db.select().from(recalculationRecords),
+        account: await context.db.query.enableBankingProviderAccounts.findFirst({
+          where: eq(enableBankingProviderAccounts.id, providerAccount!.id),
+        }),
+        jobs: (
+          await context.pool.query(
+            "select id::text from pgboss.job where name = 'financial.recalculate' order by id",
+          )
+        ).rows,
+      });
+      const baseline = await stateBeforeActivation();
+      // Test-only drift in the inserted opening entry reaches the real exact-reconciliation guard.
+      await context.pool.query(`
+        create function test_activation_mismatch() returns trigger language plpgsql as $$
+        begin new.amount_minor := new.amount_minor + 1; return new; end $$;
+        create trigger test_activation_mismatch before insert on account_entries
+          for each row when (new.role = 'opening_balance') execute function test_activation_mismatch();
+      `);
+      try {
+        await expect(
+          executeEnableBankingInitialActivation(context.db, boss, activationInput),
+        ).rejects.toMatchObject({ code: 'enable_banking.activation_reconciliation_not_exact' });
+        expect(await stateBeforeActivation()).toEqual(baseline);
+      } finally {
+        await context.pool.query(
+          'drop trigger test_activation_mismatch on account_entries; drop function test_activation_mismatch()',
+        );
+      }
+      // A later SQL error also rolls back the full opening/import/reconciliation bundle.
+      await context.pool.query(`
+        create function test_activation_failure() returns trigger language plpgsql as $$
+        begin raise exception 'synthetic post-write activation failure'; end $$;
+        create trigger test_activation_failure before update on enable_banking_provider_accounts
+          for each row when (new.owner_activated_at is not null) execute function test_activation_failure();
+      `);
+      try {
+        await expect(
+          executeEnableBankingInitialActivation(context.db, boss, activationInput),
+        ).rejects.toBeDefined();
+        expect(await stateBeforeActivation()).toEqual(baseline);
+      } finally {
+        await context.pool.query(
+          'drop trigger test_activation_failure on enable_banking_provider_accounts; drop function test_activation_failure()',
+        );
+      }
+      const realSend = boss.send.bind(boss);
+      const send = vi.spyOn(boss, 'send').mockImplementationOnce(async (...args) => {
+        await realSend(...args);
+        throw new Error('synthetic enqueue failure');
+      });
+      try {
+        await expect(
+          executeEnableBankingInitialActivation(context.db, boss, activationInput),
+        ).rejects.toThrow('synthetic enqueue failure');
+        expect(await stateBeforeActivation()).toEqual(baseline);
+      } finally {
+        send.mockRestore();
+      }
       const imported = await executeEnableBankingInitialActivation(context.db, boss, {
         ownerId,
         evidence,
@@ -487,6 +761,7 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
       expect(reconciliation?.differenceMinor).toBe(0n);
       expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
       expect(await context.db.select().from(recalculationRecords)).toHaveLength(1);
+      const activatedState = await stateBeforeActivation();
       const activationReplay = await executeEnableBankingInitialActivation(context.db, boss, {
         ownerId,
         evidence,
@@ -495,6 +770,15 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         now: '2026-09-25T09:20:00Z',
       });
       expect(activationReplay.replayed).toBe(true);
+      expect(await stateBeforeActivation()).toEqual(activatedState);
+      await expect(
+        executeEnableBankingInitialActivation(context.db, boss, {
+          ...activationInput,
+          evidence: { ...evidence, openingBalanceMinor: evidence.openingBalanceMinor + 1n },
+        }),
+      ).rejects.toMatchObject({ code: 'command.payload_conflict' });
+      expect(await stateBeforeActivation()).toEqual(activatedState);
+
       expect(await context.db.select().from(enableBankingCanonicalImports)).toHaveLength(5);
       expect(await context.db.select().from(enableBankingOpeningBalanceEvidence)).toHaveLength(1);
       expect((await context.db.query.ownerInputVersions.findFirst())?.version).toBe(1n);
@@ -624,6 +908,38 @@ suite('Enable Banking durable evidence-only diagnostic synchronization', () => {
         'history_coverage_unavailable',
       ],
     });
+    const newSessionBodies = () => [
+      {
+        status: 'AUTHORIZED',
+        accounts_data: [{ uid: providerUid, identification_hash: identificationHash }],
+        aspsp: { name: 'Swedbank', country: 'LV' },
+        psu_type: 'personal',
+        access: { valid_until: '2027-03-25T09:30:00Z' },
+        created: '2026-09-25T09:30:00Z',
+        authorized: '2026-09-25T09:30:02Z',
+        closed: null,
+      },
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.balances),
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.firstPage),
+      fixture(ENABLE_BANKING_CONTRACT_FIXTURES.finalPage),
+    ];
+    const boss = createJobBoss(databaseUrl!, 3);
+    await boss.start();
+    try {
+      for (const [index, at] of ['2026-09-25T09:31:00Z', '2026-09-25T09:32:00Z'].entries()) {
+        const queue = newSessionBodies();
+        await executeEnableBankingSync(context.db, boss, configuration, {
+          canonicalImportEnabled: false,
+          clock: { now: () => new Date(at) },
+          fetchImplementation: vi.fn(() => Promise.resolve(response(queue.shift()))),
+        });
+        const readiness = await loadEnableBankingActivationReadiness(context.db, ownerId, true);
+        expect(readiness.unmet.includes('transaction_identity_unverified')).toBe(index === 0);
+        expect(readiness.unmet).not.toContain('history_coverage_unavailable');
+      }
+    } finally {
+      await boss.stop({ graceful: true, timeout: 5_000, close: true });
+    }
   });
 
   it('revokes consent and erases usable session aliases without deleting evidence', async () => {

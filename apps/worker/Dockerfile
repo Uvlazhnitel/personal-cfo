@@ -27,6 +27,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 RUN addgroup --system --gid 1001 nodejs && adduser --system --uid 1001 worker
 COPY --from=build --chown=worker:nodejs /app/deploy ./
+COPY --from=build --chown=worker:nodejs /app/pnpm-workspace.yaml ./pnpm-workspace.yaml
 COPY --from=build --chown=worker:nodejs /app/apps/worker/dist ./dist
 COPY --from=build --chown=worker:nodejs /app/packages/data/migrations ./migrations
 USER worker

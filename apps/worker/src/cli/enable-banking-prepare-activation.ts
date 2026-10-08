@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
-import { chmod, readFile, realpath, stat, writeFile } from 'node:fs/promises';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { readFile } from 'node:fs/promises';
 import { stdin, stdout } from 'node:process';
 
 import {
@@ -10,6 +9,8 @@ import {
   requireDatabaseUrl,
 } from '@personal-cfo/data';
 import { and, eq, isNotNull } from 'drizzle-orm';
+
+import { activationFilePaths, writeActivationPlan } from '../enable-banking/activation-files.js';
 
 import {
   enableBankingConfiguration,
@@ -92,20 +93,14 @@ function rigaMidnight(value: string): string {
 }
 
 if (!stdin.isTTY || !stdout.isTTY) throw new Error('Interactive TTY is required.');
-const statementPath = resolve(argument('--statement'));
+const statementPath = argument('--statement');
 const statementPeriodFrom = argument('--from');
 const statementPeriodThrough = argument('--through');
-const outputPath = resolve(argument('--output'));
-const repository = await realpath(process.cwd());
-const statement = await realpath(statementPath);
-const outputDirectory = await realpath(dirname(outputPath));
-if (!isAbsolute(statement) || !relative(repository, statement).startsWith('..'))
-  throw new Error('The statement must remain outside the repository.');
-if (!relative(repository, outputDirectory).startsWith('..'))
-  throw new Error('The activation plan must remain outside the repository.');
-const metadata = await stat(statement);
-if (!metadata.isFile() || (metadata.mode & 0o077) !== 0)
-  throw new Error('The statement must be a mode-0600 file.');
+const { statement, output: outputPath } = await activationFilePaths(
+  process.cwd(),
+  statementPath,
+  argument('--output'),
+);
 const configuration = await enableBankingConfiguration();
 const schedule = enableBankingScheduleConfiguration();
 if (configuration.canonicalImportEnabled === true || schedule.enabled)
@@ -149,8 +144,7 @@ try {
     null,
     2,
   );
-  await writeFile(outputPath, `${payload}\n`, { encoding: 'utf8', mode: 0o600 });
-  await chmod(outputPath, 0o600);
+  await writeActivationPlan(outputPath, payload);
   console.info(
     JSON.stringify({
       event: 'enable_banking.activation_prepared',

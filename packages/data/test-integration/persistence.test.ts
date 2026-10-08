@@ -65,7 +65,14 @@ suite('PostgreSQL persistent financial pipeline', () => {
     const migrations = await context.pool.query<{ count: string }>(
       'select count(*)::text as count from drizzle.__drizzle_migrations',
     );
-    expect(migrations.rows[0]?.count).toBe('13');
+    expect(migrations.rows[0]?.count).toBe('14');
+    const replayColumns = await context.pool.query<{ column_name: string; is_nullable: string }>(
+      "select column_name, is_nullable from information_schema.columns where table_schema = 'public' and table_name = 'enable_banking_source_revisions' and column_name in ('first_completed_run_id', 'replay_completed_run_id') order by column_name",
+    );
+    expect(replayColumns.rows).toEqual([
+      { column_name: 'first_completed_run_id', is_nullable: 'YES' },
+      { column_name: 'replay_completed_run_id', is_nullable: 'YES' },
+    ]);
   });
 
   it('round-trips bigint, UTC microseconds, and exact numeric strings', async () => {
