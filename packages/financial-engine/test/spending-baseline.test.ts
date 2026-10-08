@@ -68,6 +68,12 @@ function settings(overrides: Partial<SpendingBaselineSettings> = {}): SpendingBa
     seasonalityCap: createExactFraction(1n, 5n),
     fallbackNormalBaseline: createMoney(150_000n, EUR),
     fallbackEssentialBaseline: createMoney(100_000n, EUR),
+    fallbackProvenance: {
+      source: 'owner_confirmed_history_estimate',
+      confidence: 'provisional',
+      historyStart: parseLocalDate('2025-01-01'),
+      cashAllowance: createMoney(20_000n, EUR),
+    },
     ...overrides,
   };
 }
@@ -507,7 +513,22 @@ describe('spending baseline', () => {
     expect(result.status).toBe('partial');
     expect(baseline.source).toBe('fallback');
     expect(baseline.normalBaseline.amountMinor).toBe(150_000n);
+    expect(baseline.essentialBaseline.amountMinor).toBe(100_000n);
+    expect(baseline.fallbackProvenance).toEqual({
+      source: 'owner_confirmed_history_estimate',
+      confidence: 'provisional',
+      historyStart: '2025-01-01',
+      cashAllowance: { amountMinor: 20_000n, currency: 'EUR' },
+    });
     expect(baseline.variabilityBuffer.amountMinor).toBe(0n);
+    expect(result.warnings.map((item) => item.code)).toEqual(
+      expect.arrayContaining([
+        'baseline.missing_month_coverage',
+        'baseline.insufficient_history',
+        'baseline.insufficient_variability_sample',
+        'baseline.provisional_fallback',
+      ]),
+    );
   });
 
   it('selects the latest six complete months across an interspersed incomplete month', () => {
@@ -537,6 +558,7 @@ describe('spending baseline', () => {
 
     expect(value(result).historicalWindowUsed).toEqual(selected);
     expect(value(result).source).toBe('historical');
+    expect(value(result).fallbackProvenance).toBeNull();
     expect(reordered.value).toEqual(result.value);
     expect(reordered.warnings).toEqual(result.warnings);
     expect(

@@ -34574,6 +34574,7 @@
         "amountMinor": "0",
         "currency": "EUR"
       },
+      "fallbackProvenance": null,
       "historicalWindowUsed": [
         "2026-03",
         "2026-04",

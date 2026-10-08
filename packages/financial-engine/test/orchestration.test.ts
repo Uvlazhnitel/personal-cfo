@@ -159,6 +159,7 @@ function input(ambiguity: 'none' | 'material' | 'non_material' = 'none'): Financ
           seasonalityCap: createExactFraction(1n, 5n),
           fallbackNormalBaseline: null,
           fallbackEssentialBaseline: null,
+          fallbackProvenance: null,
         },
         liquidity: {
           minimumReserveMonths: createExactFraction(1n, 1n),
@@ -1235,6 +1236,268 @@ describe('financial state orchestration', () => {
 });
 
 describe('investability readiness derivation', () => {
+  function expectBlocked(
+    readiness: ReturnType<typeof deriveInvestabilityReadiness>,
+    reason: string,
+  ): void {
+    expect(readiness.kind).toBe('blocked');
+    if (readiness.kind !== 'blocked') throw new Error('Expected blocked readiness.');
+    expect(readiness.reasons).toContain(reason);
+  }
+
+  function provisionalFallbackInput(materiality: 'material' | 'non_material', ambiguityCount = 1) {
+    const base = input();
+    const ambiguityFacts = Array.from({ length: ambiguityCount }, (_, index) => {
+      const transactionId = parseTransactionId(uuid(2_000 + index));
+      const effectiveAt = parseInstant('2026-07-10T08:00:00Z');
+      const transaction = createCanonicalTransaction({
+        id: transactionId,
+        effectiveAt,
+        bookingStatus: 'booked',
+        kind: 'external_flow',
+        entries: [
+          {
+            id: parseEntryId(uuid(3_000 + index)),
+            transactionId,
+            accountId: BANK_ID,
+            amount: money(-100n),
+            role: 'external_flow',
+          },
+        ],
+      });
+      return {
+        transaction,
+        ambiguity: createFlowAmbiguity({
+          transactionId,
+          effectiveAt,
+          kind: 'unclassified_external_flow',
+          materiality,
+        }),
+      };
+    });
+    const historyStart = parseLocalDate('2026-06-01');
+    const incompleteCoverage = ['2026-06', '2026-07', '2026-08'].map((month) =>
+      createCalendarMonthCoverage({
+        month: parseYearMonth(month),
+        reconciled: true,
+        materialAmbiguityFree: materiality === 'non_material',
+        fxComplete: true,
+        spendingClassificationComplete: false,
+      }),
+    );
+    return {
+      ...base,
+      settingsHistory: [
+        {
+          ...base.settingsHistory[0]!,
+          spendingBaseline: {
+            ...base.settingsHistory[0]!.spendingBaseline,
+            fallbackNormalBaseline: money(60_000n),
+            fallbackEssentialBaseline: money(30_000n),
+            fallbackProvenance: {
+              source: 'owner_confirmed_history_estimate' as const,
+              confidence: 'provisional' as const,
+              historyStart,
+              cashAllowance: money(20_000n),
+            },
+          },
+        },
+      ],
+      canonical: {
+        ...base.canonical,
+        transactions: ambiguityFacts.map((item) => item.transaction),
+        ambiguities: ambiguityFacts.map((item) => item.ambiguity),
+      },
+      current: {
+        ...base.current,
+        monthCoverage: incompleteCoverage,
+        historyCoverage: {
+          startInclusive: parseInstant('2026-06-01T00:00:00Z'),
+          endExclusive: base.current.historyCoverage.endExclusive,
+        },
+        quality: {
+          ...base.current.quality,
+          spendingClassification: 'partial' as const,
+        },
+      },
+    } satisfies FinancialEngineInput;
+  }
+
+  it('uses reconciled owner-confirmed fallback evidence provisionally without mutating ambiguity', () => {
+    const prepared = provisionalFallbackInput('non_material', 241);
+    const transactionIds = prepared.canonical.transactions.map((item) => item.id);
+    const ambiguityTransactionIds = prepared.canonical.ambiguities.map(
+      (item) => item.transactionId,
+    );
+    const result = evaluateFinancialState(prepared);
+
+    expect(result.spendingBaseline).toMatchObject({
+      status: 'partial',
+      value: {
+        source: 'fallback',
+        normalBaseline: { amountMinor: 60_000n, currency: 'EUR' },
+        essentialBaseline: { amountMinor: 30_000n, currency: 'EUR' },
+      },
+    });
+    expect(result.liquidityReserve.status).toBe('partial');
+    expect(result.liquidityReserve.value).not.toBeNull();
+    expect(result.investabilityReadiness).toEqual({
+      kind: 'provisional',
+      reasons: ['non_material_spending_history_incomplete'],
+    });
+    expect(result.safeToInvest.status).toBe('partial');
+    expect(result.safeToInvest.value).not.toBeNull();
+    expect(result.safeToInvest.warnings).toContainEqual({
+      code: 'safe_to_invest.provisional',
+      context: { reasons: 'non_material_spending_history_incomplete' },
+    });
+    expect(result.activeAmbiguities).toHaveLength(241);
+    expect(prepared.canonical.transactions.map((item) => item.id)).toEqual(transactionIds);
+    expect(prepared.canonical.ambiguities.map((item) => item.transactionId)).toEqual(
+      ambiguityTransactionIds,
+    );
+    expect(prepared.canonical.economicFlows).toEqual([]);
+    expect(prepared.canonical.spendingObservations).toEqual([]);
+  });
+
+  it('keeps the same fallback blocked when ambiguity becomes material', () => {
+    const result = evaluateFinancialState(provisionalFallbackInput('material'));
+    expect(result.investabilityReadiness).toMatchObject({ kind: 'blocked' });
+    expect(result.safeToInvest).toMatchObject({ status: 'unavailable', value: null });
+  });
+
+  it('keeps provisional fallback blocked when exact reconciliation evidence is missing', () => {
+    const prepared = provisionalFallbackInput('non_material');
+    const result = evaluateFinancialState({
+      ...prepared,
+      current: {
+        ...prepared.current,
+        monthCoverage: prepared.current.monthCoverage.map((item, index) =>
+          index === 0 ? { ...item, reconciled: false } : item,
+        ),
+        quality: { ...prepared.current.quality, liquidBalance: 'partial' },
+      },
+    });
+    expectBlocked(result.investabilityReadiness, 'incomplete_liquid_balance');
+  });
+
+  it('keeps every required planning input fail-closed on the fallback path', () => {
+    const prepared = provisionalFallbackInput('non_material');
+    const cases: readonly Readonly<{
+      blocker: string;
+      input: FinancialEngineInput;
+    }>[] = [
+      {
+        blocker: 'incomplete_obligations',
+        input: {
+          ...prepared,
+          current: {
+            ...prepared.current,
+            quality: {
+              ...prepared.current.quality,
+              liquidityInputs: {
+                ...prepared.current.quality.liquidityInputs,
+                obligations: 'partial',
+              },
+            },
+          },
+        },
+      },
+      {
+        blocker: 'incomplete_sinking_protection',
+        input: {
+          ...prepared,
+          current: {
+            ...prepared.current,
+            quality: {
+              ...prepared.current.quality,
+              liquidityInputs: {
+                ...prepared.current.quality.liquidityInputs,
+                restrictedCash: 'partial',
+              },
+            },
+          },
+        },
+      },
+      {
+        blocker: 'unknown_next_reliable_income',
+        input: {
+          ...prepared,
+          current: { ...prepared.current, nextReliableIncomeDate: null },
+        },
+      },
+      {
+        blocker: 'other_material_incompleteness',
+        input: {
+          ...prepared,
+          current: {
+            ...prepared.current,
+            quality: {
+              ...prepared.current.quality,
+              liquidityInputs: {
+                ...prepared.current.quality.liquidityInputs,
+                operationalNeeds: 'partial',
+              },
+            },
+          },
+        },
+      },
+    ];
+    for (const scenario of cases) {
+      expectBlocked(
+        evaluateFinancialState(scenario.input).investabilityReadiness,
+        scenario.blocker,
+      );
+    }
+  });
+
+  it('blocks discontinuous history evidence and ambiguity kinds outside the narrow policy', () => {
+    const prepared = provisionalFallbackInput('non_material');
+    const missingMonth = evaluateFinancialState({
+      ...prepared,
+      current: {
+        ...prepared.current,
+        monthCoverage: prepared.current.monthCoverage.slice(1),
+      },
+    });
+    expectBlocked(missingMonth.investabilityReadiness, 'incomplete_spending_baseline');
+
+    const ambiguity = prepared.canonical.ambiguities[0]!;
+    const otherKind = evaluateFinancialState({
+      ...prepared,
+      canonical: {
+        ...prepared.canonical,
+        ambiguities: [
+          createFlowAmbiguity({
+            transactionId: ambiguity.transactionId,
+            effectiveAt: ambiguity.effectiveAt,
+            kind: 'unresolved_transfer',
+            materiality: 'non_material',
+          }),
+        ],
+      },
+    });
+    expectBlocked(otherKind.investabilityReadiness, 'incomplete_spending_baseline');
+  });
+
+  it('does not activate a legacy fallback without explicit provenance', () => {
+    const prepared = provisionalFallbackInput('non_material');
+    const result = evaluateFinancialState({
+      ...prepared,
+      settingsHistory: [
+        {
+          ...prepared.settingsHistory[0]!,
+          spendingBaseline: {
+            ...prepared.settingsHistory[0]!.spendingBaseline,
+            fallbackProvenance: null,
+          },
+        },
+      ],
+    });
+    expect(result.spendingBaseline).toMatchObject({ status: 'unavailable', value: null });
+    expectBlocked(result.investabilityReadiness, 'incomplete_spending_baseline');
+  });
+
   it('does not derive readiness from warning text', () => {
     const evaluated = evaluateFinancialState(input());
     const quality = input().current.quality;
@@ -1245,6 +1508,8 @@ describe('investability readiness derivation', () => {
       liquidity: evaluated.liquidityReserve,
       quality,
       nextReliableIncomeDate: parseLocalDate('2026-09-27'),
+      effectiveDate: EFFECTIVE_DATE,
+      monthCoverage: input().current.monthCoverage,
       ambiguities: [],
       cashReconciliations: [],
     });
@@ -1258,6 +1523,8 @@ describe('investability readiness derivation', () => {
       liquidity: evaluated.liquidityReserve,
       quality,
       nextReliableIncomeDate: parseLocalDate('2026-09-27'),
+      effectiveDate: EFFECTIVE_DATE,
+      monthCoverage: input().current.monthCoverage,
       ambiguities: [],
       cashReconciliations: [],
     });

@@ -77,6 +77,15 @@ export type MaterialitySettingsInput = Readonly<{
   effectiveDate: string;
 }>;
 
+export type ProvisionalBaselineSettingsInput = Readonly<{
+  normalAmountMinor: bigint;
+  essentialAmountMinor: bigint;
+  cashAllowanceAmountMinor: bigint;
+  historyStart: string;
+  effectiveAt: string;
+  effectiveDate: string;
+}>;
+
 function settingsRecord(value: unknown, code: string): Readonly<Record<string, unknown>> {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
     throw new DataInvariantError(code, 'Settings payload must be an object.');
@@ -388,6 +397,138 @@ export async function appendMaterialitySettingsVersion(
         amountMinor: threshold.amountMinor.toString(),
         currency: threshold.currency,
       }),
+      unchanged: false,
+    }),
+  });
+}
+
+export async function appendProvisionalBaselineSettingsVersion(
+  tx: DatabaseTransaction,
+  ownerId: string,
+  input: ProvisionalBaselineSettingsInput,
+): Promise<CommandMutationResult> {
+  const amounts = [
+    input.normalAmountMinor,
+    input.essentialAmountMinor,
+    input.cashAllowanceAmountMinor,
+  ];
+  if (
+    amounts.some(
+      (amount) => typeof amount !== 'bigint' || amount < 0n || amount > MAX_MONEY_MINOR,
+    ) ||
+    input.essentialAmountMinor > input.normalAmountMinor ||
+    input.cashAllowanceAmountMinor > input.normalAmountMinor
+  ) {
+    throw new DataInvariantError(
+      'settings.invalid_provisional_baseline',
+      'Provisional baseline amounts must be non-negative EUR values with essential and cash allowance not above normal.',
+    );
+  }
+  const parsedHistoryStart = new Date(`${input.historyStart}T00:00:00.000Z`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}$/u.test(input.historyStart) ||
+    Number.isNaN(parsedHistoryStart.getTime()) ||
+    parsedHistoryStart.toISOString().slice(0, 10) !== input.historyStart ||
+    input.historyStart > input.effectiveDate
+  ) {
+    throw new DataInvariantError(
+      'settings.invalid_provisional_history_start',
+      'Provisional baseline history start must be a valid non-future YYYY-MM-DD date.',
+    );
+  }
+  const effectiveAt = canonicalDatabaseInstant(input.effectiveAt);
+  const rows = await tx.query.settingsVersions.findMany({
+    where: eq(settingsVersions.ownerId, ownerId),
+  });
+  const current = rows.find((row) => row.isCurrent);
+  const currentPayload: Readonly<Record<string, unknown>> =
+    current === undefined
+      ? Object.freeze({})
+      : settingsRecord(decodeSourceJson(current.payload), 'settings.invalid_current_payload');
+  const normal = createMoney(input.normalAmountMinor, EUR);
+  const essential = createMoney(input.essentialAmountMinor, EUR);
+  const provenance = Object.freeze({
+    source: 'owner_confirmed_history_estimate' as const,
+    confidence: 'provisional' as const,
+    historyStart: input.historyStart,
+    cashAllowance: createMoney(input.cashAllowanceAmountMinor, EUR),
+  });
+  const spending = settingsRecord(
+    currentPayload['spendingBaseline'] ?? {},
+    'settings.invalid_current_spending_payload',
+  );
+  if (
+    JSON.stringify(
+      normalizeSnapshotJson({
+        fallbackNormalBaseline: spending['fallbackNormalBaseline'] ?? null,
+        fallbackEssentialBaseline: spending['fallbackEssentialBaseline'] ?? null,
+        fallbackProvenance: spending['fallbackProvenance'] ?? null,
+      }),
+    ) ===
+    JSON.stringify(
+      normalizeSnapshotJson({
+        fallbackNormalBaseline: normal,
+        fallbackEssentialBaseline: essential,
+        fallbackProvenance: provenance,
+      }),
+    )
+  ) {
+    return Object.freeze({
+      mutated: false,
+      entityType: 'settings_version',
+      entityId: current?.version ?? ownerId,
+      earliestAffectedAt: null,
+      result: Object.freeze({ settingsVersion: current?.version ?? null, unchanged: true }),
+    });
+  }
+  for (const row of rows) {
+    const payload = settingsRecord(
+      decodeSourceJson(row.payload),
+      'settings.invalid_persisted_payload',
+    );
+    if (payload['effectiveFrom'] === input.effectiveDate) {
+      throw new DataConflictError(
+        'settings.effective_date_conflict',
+        'A different settings version is already effective on this Europe/Riga date.',
+      );
+    }
+  }
+  const version = generateUuidV7('settings-version');
+  const payload = Object.freeze({
+    ...currentPayload,
+    effectiveFrom: input.effectiveDate,
+    version,
+    spendingBaseline: Object.freeze({
+      ...spending,
+      fallbackNormalBaseline: normal,
+      fallbackEssentialBaseline: essential,
+      fallbackProvenance: provenance,
+    }),
+  });
+  if (current !== undefined) {
+    await tx
+      .update(settingsVersions)
+      .set({ isCurrent: false })
+      .where(
+        and(eq(settingsVersions.ownerId, ownerId), eq(settingsVersions.version, current.version)),
+      );
+  }
+  await tx.insert(settingsVersions).values({
+    ownerId,
+    version,
+    effectiveFrom: effectiveAt,
+    payload: encodeSourceJson(payload),
+    isCurrent: true,
+  });
+  return Object.freeze({
+    entityType: 'settings_version',
+    entityId: version,
+    earliestAffectedAt: effectiveAt,
+    result: Object.freeze({
+      settingsVersion: version,
+      previousSettingsVersion: current?.version ?? null,
+      effectiveFrom: input.effectiveDate,
+      provisionalBaseline: Object.freeze({ normal, essential, provenance }),
       unchanged: false,
     }),
   });

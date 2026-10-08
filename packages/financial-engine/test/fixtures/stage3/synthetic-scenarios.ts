@@ -258,6 +258,7 @@ export const SYNTHETIC_SETTINGS: FinancialEngineSettings = Object.freeze({
     seasonalityCap: createExactFraction(1n, 5n),
     fallbackNormalBaseline: null,
     fallbackEssentialBaseline: null,
+    fallbackProvenance: null,
   }),
   liquidity: Object.freeze({
     minimumReserveMonths: createExactFraction(1n, 1n),

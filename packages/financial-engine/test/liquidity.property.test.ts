@@ -54,6 +54,7 @@ function baseline(): SpendingBaseline {
     historicalWindowUsed: [parseYearMonth('2026-01')],
     seasonalAdjustment: null,
     source: 'historical',
+    fallbackProvenance: null,
   });
 }
 

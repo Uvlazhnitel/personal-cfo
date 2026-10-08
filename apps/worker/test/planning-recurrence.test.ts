@@ -116,6 +116,7 @@ describe('run-relative planning recurrence', () => {
           historicalWindowUsed: [parseYearMonth('2026-09')],
           seasonalAdjustment: null,
           source: 'historical',
+          fallbackProvenance: null,
         },
         explanation: [],
         warnings: [],

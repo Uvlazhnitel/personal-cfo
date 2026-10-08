@@ -6,6 +6,7 @@ import type { PgBoss } from 'pg-boss';
 
 import {
   appendMaterialitySettingsVersion,
+  appendProvisionalBaselineSettingsVersion,
   auditEvents,
   createDatabaseContext,
   createJobBoss,
@@ -70,6 +71,43 @@ suite('versioned materiality settings command', () => {
         appendMaterialitySettingsVersion(tx, ownerId, {
           amountMinor,
           currency: 'EUR',
+          effectiveAt: now,
+          effectiveDate,
+        }),
+    );
+  }
+
+  async function provisional(
+    ownerId: string,
+    idempotencyKey: string,
+    now: string,
+    effectiveDate: string,
+  ) {
+    const request = {
+      normal: { amountMinor: 60_000n },
+      essential: { amountMinor: 30_000n },
+      cashAllowance: { amountMinor: 20_000n },
+      historyStart: '2026-07-01',
+      reason: 'Owner confirmed reviewed history estimate.',
+    };
+    return executeFinancialCommand(
+      context.db,
+      boss,
+      {
+        ownerId,
+        kind: 'settings_change',
+        idempotencyKey,
+        request,
+        asOf: now,
+        effectiveDate,
+        now,
+      },
+      (tx) =>
+        appendProvisionalBaselineSettingsVersion(tx, ownerId, {
+          normalAmountMinor: 60_000n,
+          essentialAmountMinor: 30_000n,
+          cashAllowanceAmountMinor: 20_000n,
+          historyStart: '2026-07-01',
           effectiveAt: now,
           effectiveDate,
         }),
@@ -202,6 +240,64 @@ suite('versioned materiality settings command', () => {
     ).rejects.toMatchObject({ code: 'settings.effective_date_conflict' });
     expect(
       await context.db.select().from(settingsVersions).where(eq(settingsVersions.ownerId, ownerId)),
+    ).toHaveLength(1);
+  });
+
+  it('persists provisional provenance, preserves settings, and replays without another version', async () => {
+    const ownerId = await createLocalUser(context.db, {
+      loginName: 'provisional-settings-owner',
+      password: 'a sufficiently long password',
+    });
+    await change(ownerId, 'provisional-materiality', 10_000n, '2026-10-07T08:00:00Z', '2026-10-07');
+    const first = await provisional(
+      ownerId,
+      'provisional-baseline-001',
+      '2026-10-08T08:00:00Z',
+      '2026-10-08',
+    );
+    expect(first).toMatchObject({ replayed: false, mutated: true, inputVersion: 2n });
+    const current = await context.db.query.settingsVersions.findFirst({
+      where: eq(settingsVersions.ownerId, ownerId),
+      orderBy: (settings, { desc }) => [desc(settings.effectiveFrom)],
+    });
+    expect(decodeSourceJson(current?.payload)).toMatchObject({
+      spendingBaseline: {
+        materialityThreshold: { amountMinor: 10_000n, currency: 'EUR' },
+        fallbackNormalBaseline: { amountMinor: 60_000n, currency: 'EUR' },
+        fallbackEssentialBaseline: { amountMinor: 30_000n, currency: 'EUR' },
+        fallbackProvenance: {
+          source: 'owner_confirmed_history_estimate',
+          confidence: 'provisional',
+          historyStart: '2026-07-01',
+          cashAllowance: { amountMinor: 20_000n, currency: 'EUR' },
+        },
+      },
+    });
+    const replay = await provisional(
+      ownerId,
+      'provisional-baseline-001',
+      '2026-10-08T08:00:00Z',
+      '2026-10-08',
+    );
+    expect(replay).toMatchObject({ replayed: true, inputVersion: 2n });
+    const unchanged = await provisional(
+      ownerId,
+      'provisional-baseline-same-value',
+      '2026-10-09T08:00:00Z',
+      '2026-10-09',
+    );
+    expect(unchanged).toMatchObject({ replayed: false, mutated: false, inputVersion: 2n });
+    expect(
+      await context.db.select().from(settingsVersions).where(eq(settingsVersions.ownerId, ownerId)),
+    ).toHaveLength(2);
+    expect(
+      await context.db
+        .select()
+        .from(recalculationRecords)
+        .where(eq(recalculationRecords.ownerId, ownerId)),
+    ).toHaveLength(2);
+    expect(
+      await context.db.select().from(auditEvents).where(eq(auditEvents.commandId, first.commandId)),
     ).toHaveLength(1);
   });
 });

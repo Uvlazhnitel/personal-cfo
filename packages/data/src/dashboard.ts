@@ -60,6 +60,7 @@ export type DashboardOverview = Readonly<{
 }>;
 
 type MetricRow = typeof metricSnapshots.$inferSelect;
+type DashboardMetricRow = Pick<MetricRow, 'status' | 'payload' | 'asOf'>;
 
 const unavailable = <T>(reason = 'no_calculation'): DashboardMetric<T> =>
   Object.freeze({ state: 'unavailable', value: null, asOf: null, reason });
@@ -81,7 +82,12 @@ function warningCodes(payload: Readonly<Record<string, unknown>>): readonly stri
   );
 }
 
-function dataState(row: MetricRow, payload: Readonly<Record<string, unknown>>): DashboardDataState {
+const PROVISIONAL_ESTIMATE_REASON = 'provisional_estimate';
+
+function dataState(
+  row: Pick<MetricRow, 'status'>,
+  payload: Readonly<Record<string, unknown>>,
+): DashboardDataState {
   if (warningCodes(payload).some((code) => code.includes('stale'))) return 'stale';
   if (row.status === 'complete') return 'available';
   if (row.status === 'partial') return 'incomplete';
@@ -118,7 +124,10 @@ function parseMoney(value: unknown): DashboardMoney | null {
     : Object.freeze({ amountMinor, currency: 'EUR' as const });
 }
 
-function nestedValue(row: MetricRow | undefined, key: string): DashboardMetric<DashboardMoney> {
+function nestedValue(
+  row: DashboardMetricRow | undefined,
+  key: string,
+): DashboardMetric<DashboardMoney> {
   if (row === undefined) return unavailable();
   const payload = record(row.payload);
   if (payload === null) return unavailable('invalid_persisted_result');
@@ -174,9 +183,20 @@ function ratioValue(
   });
 }
 
-function safeToInvestValue(row: MetricRow | undefined): DashboardMetric<DashboardMoney> {
+export function safeToInvestValue(
+  row: DashboardMetricRow | undefined,
+): DashboardMetric<DashboardMoney> {
   const parsed = nestedValue(row, 'recommended');
   if (parsed.state === 'available') return parsed;
+  const payload = row === undefined ? null : record(row.payload);
+  if (
+    parsed.state === 'incomplete' &&
+    parsed.value !== null &&
+    payload !== null &&
+    warningCodes(payload).includes('safe_to_invest.provisional')
+  ) {
+    return Object.freeze({ ...parsed, reason: PROVISIONAL_ESTIMATE_REASON });
+  }
   return Object.freeze({ ...parsed, value: null });
 }
 

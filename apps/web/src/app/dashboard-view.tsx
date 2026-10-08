@@ -18,6 +18,8 @@ const reasonLabels: Readonly<Record<string, string>> = Object.freeze({
   invalid_persisted_result: 'The latest persisted result could not be displayed safely.',
   monthly_baseline_unavailable: 'No reliable prior-month baseline is available.',
   no_calculation: 'No completed calculation is available yet.',
+  provisional_estimate:
+    'Conservative provisional estimate; unresolved non-material spending history remains.',
   recommendation_blocked:
     'Incomplete or unreconciled source data blocks a reliable recommendation.',
   required_data_unavailable: 'Required source data is unavailable.',
