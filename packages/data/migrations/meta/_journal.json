@@ -92,6 +92,13 @@
       "when": 1790534840914,
       "tag": "0012_safe_production_activation",
       "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1791492209315,
+      "tag": "0013_stage87_replay_proof",
+      "breakpoints": true
     }
   ]
 }

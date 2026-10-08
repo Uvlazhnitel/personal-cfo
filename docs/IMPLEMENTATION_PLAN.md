@@ -146,6 +146,8 @@ Required reconciliation regressions are:
 
 **Implementation status:** `STAGE_8_7_DRY_RUN_PENDING`. Stage 8.0 selected Enable Banking restricted production for one personal Swedbank Latvia EUR account. Stage 8.1 implemented the secure client/consent and evidence boundary. Stage 8.2 added recoverable synchronization and neutral booked-import primitives. Stage 8.7 replaces timestamp-only activation with one idempotent command that requires verified official opening-balance provenance and atomically commits the opening fact, sealed booked set, reconciliation, activation marker, audit, input version, and recalculation job. Production activation remains forbidden until the protected evidence refresh and dry run pass and the owner gives separate explicit approval.
 
+**Stage 8.7 repository acceptance:** Current-session/account closed coverage, distinct-completed-scan booked replay, whole-workspace protected-file containment, deterministic ITBD/CLBD selection, stale-plan rejection, activation replay, and rollback after canonical writes or job-enqueue failure require offline regression coverage. Historical coverage remains available to existing metric consumers. ADR-039 and the provider runbook define the activation and operator-evidence contract; repository checks never authorize production activation.
+
 **Goal:** Reliably synchronize Swedbank accounts, balances, and transactions through the selected provider.
 
 **Dependencies:** Stage 5; ADR-036 and ADR-037; an operator-owned Enable Banking restricted-production or sandbox application; live proof that Swedbank supplies stable `entry_reference` for canonicalizable records.

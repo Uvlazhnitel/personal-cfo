@@ -255,6 +255,12 @@ suite('Stage 5 through Stage 8.7 migrations', () => {
       join(sourceMigrations, `${safeActivation.tag}.sql`),
       join(temporaryMigrations, basename(`${safeActivation.tag}.sql`)),
     );
+    const replayProof = fullJournal.entries.find((entry) => entry.idx === 13);
+    if (replayProof === undefined) throw new Error('Stage 8.7 replay-proof migration is missing.');
+    await cp(
+      join(sourceMigrations, `${replayProof.tag}.sql`),
+      join(temporaryMigrations, basename(`${replayProof.tag}.sql`)),
+    );
     await writeFile(join(temporaryMigrations, 'meta/_journal.json'), JSON.stringify(fullJournal));
     await migrateDatabase(context.db, temporaryMigrations);
     await migrateDatabase(context.db, temporaryMigrations);
@@ -263,5 +269,9 @@ suite('Stage 5 through Stage 8.7 migrations', () => {
       "select count(*)::text as count from information_schema.tables where table_schema = 'public' and table_name = 'enable_banking_opening_balance_evidence'",
     );
     expect(openingEvidenceTable.rows[0]?.count).toBe('1');
+    const replayColumns = await context.pool.query<{ count: string }>(
+      "select count(*)::text as count from information_schema.columns where table_schema = 'public' and table_name = 'enable_banking_source_revisions' and column_name in ('first_completed_run_id', 'replay_completed_run_id') and is_nullable = 'YES'",
+    );
+    expect(replayColumns.rows[0]?.count).toBe('2');
   });
 });

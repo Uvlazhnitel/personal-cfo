@@ -1,0 +1,4 @@
+ALTER TABLE "enable_banking_source_revisions" ADD COLUMN "first_completed_run_id" uuid;--> statement-breakpoint
+ALTER TABLE "enable_banking_source_revisions" ADD COLUMN "replay_completed_run_id" uuid;--> statement-breakpoint
+ALTER TABLE "enable_banking_source_revisions" ADD CONSTRAINT "enable_banking_source_revisions_first_completed_run_id_enable_banking_runs_id_fk" FOREIGN KEY ("first_completed_run_id") REFERENCES "public"."enable_banking_runs"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "enable_banking_source_revisions" ADD CONSTRAINT "enable_banking_source_revisions_replay_completed_run_id_enable_banking_runs_id_fk" FOREIGN KEY ("replay_completed_run_id") REFERENCES "public"."enable_banking_runs"("id") ON DELETE no action ON UPDATE no action;

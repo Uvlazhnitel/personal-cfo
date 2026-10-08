@@ -52,6 +52,21 @@ describe('Enable Banking server-only configuration', () => {
     });
   });
 
+  it('rejects malformed canonical-import flags rather than enabling imports', async () => {
+    const path = await privateKeyFile();
+    await expect(
+      enableBankingConfiguration({
+        ENABLE_BANKING_APPLICATION_ID: 'application-id',
+        ENABLE_BANKING_PRIVATE_KEY_PATH: path,
+        ENABLE_BANKING_OWNER_ID: '018f0000-0000-7000-8000-000000000810',
+        ENABLE_BANKING_REDIRECT_URL:
+          'http://127.0.0.1:8080/api/v1/open-banking/enable-banking/callback',
+        ENABLE_BANKING_DATA_KEY: Buffer.alloc(32, 12).toString('base64'),
+        ENABLE_BANKING_CANONICAL_IMPORT_ENABLED: 'yes',
+      }),
+    ).rejects.toThrow('ENABLE_BANKING_CANONICAL_IMPORT_ENABLED must be true or false');
+  });
+
   it('keeps daily synchronization disabled by default and validates schedule settings', () => {
     expect(enableBankingScheduleConfiguration({})).toEqual({
       enabled: false,

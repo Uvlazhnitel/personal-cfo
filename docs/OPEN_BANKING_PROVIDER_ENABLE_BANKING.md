@@ -162,3 +162,29 @@ The latest booked `ITBD` (then `CLBD` on a tied timestamp) is reconciled at the 
 Stage 8.2 is deterministically `READY_FOR_LIVE_BANK_VALIDATION`. Live sandbox/production proof remains required before enabling canonical import. Account-scoped purge and full consent-renewal UX remain later Stage 8 work.
 
 Stage 8.2 adds no payment initiation, another bank/provider, generic banking framework, non-EUR activation, AI categorization, Stage 9 UI, trading, or automatic investment.
+
+## Stage 8.7 opening-balance dry run and operator boundary
+
+Stage 8 remains `STAGE_8_7_DRY_RUN_PENDING`. Initial activation requires official EUR opening-balance evidence and a matching prepared plan, not a timestamp-only account activation. The plan seals the booked observation set and selected booked balance revision. Closed coverage must belong to the selected owner, connection, account, and current session generation. Booked replay proof requires the same source/revision in two distinct completed scans of that generation; duplicate pages, failed scans, and legacy timestamps cannot establish it. Reconnect requires fresh proof. Existing historical coverage remains available for metric history.
+
+### Locally verifiable repository checks
+
+Run offline configuration, activation, file-boundary, provider-contract, and disposable PostgreSQL tests. Verify rejection of stale plans, unproven replay and coverage, and full rollback after activation writes or enqueue failure. Verify replay creates no second fact, audit, version increment, or job. Review migration provenance, disabled flag defaults, and ITBD preference over CLBD at tied balance cutoffs. These checks use sanitized fixtures and cannot attest live bank identity, statement authenticity, deployed flags, or backup restoration.
+
+### Human operator preparation
+
+1. Keep `ENABLE_BANKING_CANONICAL_IMPORT_ENABLED=false` on web and worker and `ENABLE_BANKING_SYNC_ENABLED=false`. Verify the effective deployed settings, not merely the example file. Do not call the activation endpoint.
+2. Before deployment or migration, complete the protected backup/restore verification below. Deploy the reviewed release with both flags disabled and apply migration `0013_stage87_replay_proof` explicitly using `pnpm db:migrate` (or the Compose tools profile). Verify the applied migration record and nullable run-reference columns. Never migrate from web or worker startup; legacy timestamps require new completed-scan proof.
+3. In the protected operator environment, refresh evidence with `pnpm enable-banking:sync` while both flags remain disabled. Fully drain the initial `longest` scan and a distinct repeat scan in the current session. Verify the selected account identity, stable booked references, closed coverage, and evidence-only outcomes. Failed or partial scans do not count.
+4. Obtain the official statement covering the proven interval. Independently verify its account, EUR currency, period, and opening balance at the start of the first Europe/Riga day. Keep the statement outside the repository in a mode-0600 file. Never paste its contents, identifiers, amounts, keys, or plan payload into Codex or logs.
+5. On a TTY, run `pnpm enable-banking:prepare-activation --statement <protected-statement-path> --from <YYYY-MM-DD> --through <YYYY-MM-DD> --output <new-protected-plan-path>`. Enter the official opening balance at the hidden prompt. The output must be a new path outside the workspace; existing files and symlinks are rejected. Preparation reads database evidence and creates the protected plan without changing financial state.
+6. Require `ready=true`, no blockers, exact reconciliation, the expected closed coverage and booked counts, and unchanged canonical state. Review the protected fingerprint and expected imports/ambiguities. If evidence changes, prepare a new plan; do not reuse the stale fingerprint.
+7. Run `pnpm enable-banking:review-transfers` for the safe summary. Any `--details` review is owner-only on a protected TTY without terminal recording or log capture. Candidates remain unresolved; this command persists no classifications, transfers, or contribution principal.
+
+### Protected production evidence required before activation
+
+Retain an operator-controlled evidence record identifying the reviewed release/migrations, current session and scan proof, official statement hash and boundary, protected plan fingerprint, exact reconciliation, transfer-review outcome, and deployed disabled flags. Do not commit the record or source data. Record the chosen off-host backup destination, encryption-key custody, retention, RPO, and RTO. Verify an encrypted pre-activation backup restores to an isolated database with the expected migrations, canonical state, encrypted evidence, and usable key custody; record completion and measured recovery time. Keep worker dispatch and banking network access disabled in the restore environment. A backup file alone is insufficient restoration evidence.
+
+### Separate final owner approval
+
+After the dry run and restored-backup evidence pass, obtain separate explicit owner approval for the reviewed account and plan fingerprint. Approval of preparation or repository changes is not activation approval. Only then may the operator enable the canonical-import deployment flag and submit the protected evidence, expected fingerprint, and `ACTIVATE_CANONICAL_IMPORT` confirmation through the authenticated, CSRF-protected activation endpoint. Scheduling remains a separate decision. Initial activation commits all facts and command effects atomically, requires a zero-minor-unit difference, and replays without duplicate effects. Pending evidence and unresolved classifications continue to downgrade completeness; no adjustment or economic meaning is synthesized.

@@ -231,6 +231,61 @@ function activationFingerprint(
   );
 }
 
+// Run references are established only by successful scan completion, never by page replay.
+async function hasCompletedBookedReplay(
+  db: Database | DatabaseTransaction,
+  account: Pick<
+    typeof enableBankingProviderAccounts.$inferSelect,
+    'ownerId' | 'connectionId' | 'id' | 'sessionGeneration'
+  >,
+): Promise<boolean> {
+  if (account.sessionGeneration === null) return false;
+  const proof = await db.execute(sql<{ proven: boolean }>`
+    select exists (
+      select 1 from ${enableBankingSourceRevisions} revision
+      join ${enableBankingRuns} first_run on first_run.id = revision.first_completed_run_id
+      join ${enableBankingRuns} replay_run on replay_run.id = revision.replay_completed_run_id
+      where revision.owner_id = ${account.ownerId}
+        and revision.connection_id = ${account.connectionId}
+        and revision.provider_account_id = ${account.id}
+        and revision.record_kind = 'transaction' and revision.provider_status = 'booked'
+        and first_run.id <> replay_run.id
+        and first_run.owner_id = ${account.ownerId} and replay_run.owner_id = ${account.ownerId}
+        and first_run.connection_id = ${account.connectionId} and replay_run.connection_id = ${account.connectionId}
+        and first_run.provider_account_id = ${account.id} and replay_run.provider_account_id = ${account.id}
+        and first_run.session_generation = ${account.sessionGeneration}
+        and replay_run.session_generation = ${account.sessionGeneration}
+        and first_run.status = 'completed' and replay_run.status = 'completed'
+    ) as proven
+  `);
+  return proof.rows[0]?.['proven'] === true;
+}
+
+async function loadActivationCoverage(
+  db: Database | DatabaseTransaction,
+  account: typeof enableBankingProviderAccounts.$inferSelect | null,
+  at?: string,
+): Promise<readonly EnableBankingCoverageInterval[]> {
+  if (account === null || account.sessionGeneration === null) return [];
+  const rows = await db.query.enableBankingHistoryCoverage.findMany({
+    where: and(
+      eq(enableBankingHistoryCoverage.ownerId, account.ownerId),
+      eq(enableBankingHistoryCoverage.connectionId, account.connectionId),
+      eq(enableBankingHistoryCoverage.providerAccountId, account.id),
+      eq(enableBankingHistoryCoverage.sessionGeneration, account.sessionGeneration),
+      at === undefined ? undefined : lte(enableBankingHistoryCoverage.completedAt, at),
+      sql`exists (select 1 from ${enableBankingRuns} run
+        where run.id = ${enableBankingHistoryCoverage.runId}
+          and run.owner_id = ${account.ownerId} and run.connection_id = ${account.connectionId}
+          and run.provider_account_id = ${account.id}
+          and run.session_generation = ${account.sessionGeneration}
+          and run.status = 'completed' ${at === undefined ? sql`` : sql`and run.completed_at <= ${at}`})`,
+    ),
+    orderBy: (table, { asc }) => [asc(table.coveredFrom), asc(table.coveredThrough)],
+  });
+  return mergeCoverageIntervals(rows);
+}
+
 async function loadActivationState(
   db: Database | DatabaseTransaction,
   ownerId: string,
@@ -251,7 +306,8 @@ async function loadActivationState(
     account.currency !== 'EUR' ||
     account.sessionGeneration === null ||
     account.identityVerifiedAt === null ||
-    account.transactionIdentityVerifiedAt === null
+    account.transactionIdentityVerifiedAt === null ||
+    !(await hasCompletedBookedReplay(db, account))
   ) {
     blockers.push('account_not_ready');
   }
@@ -306,7 +362,7 @@ async function loadActivationState(
   const sourceKeys = booked.flatMap((item) => (item.sourceKey === null ? [] : [item.sourceKey]));
   if (new Set(sourceKeys).size !== booked.length) blockers.push('booked_identity_duplicate');
 
-  const coverage = await loadMergedEnableBankingCoverage(db, ownerId, now);
+  const coverage = await loadActivationCoverage(db, account, now);
   const firstCoverage = coverage[0] ?? null;
   const lastCoverage = coverage.at(-1) ?? null;
   const coverageComplete =
@@ -329,7 +385,12 @@ async function loadActivationState(
               'closing_booked',
             ]),
           ),
-          orderBy: (table, { desc }) => [desc(table.sourceAsOf), desc(table.observedAt)],
+          orderBy: (table, { desc }) => [
+            desc(table.sourceAsOf),
+            sql`case when ${table.balanceKind} = 'interim_booked' then 0 else 1 end`,
+            desc(table.observedAt),
+            desc(table.id),
+          ],
         });
   const receipt =
     balanceRow === undefined
@@ -452,20 +513,14 @@ export async function loadEnableBankingActivationReadiness(
     unmet.push('owner_not_activated');
   if (account?.identityVerifiedAt === null || account === undefined)
     unmet.push('account_identity_unverified');
-  if (account?.transactionIdentityVerifiedAt === null || account === undefined)
+  if (
+    account === undefined ||
+    account.transactionIdentityVerifiedAt === null ||
+    !(await hasCompletedBookedReplay(db, account))
+  )
     unmet.push('transaction_identity_unverified');
-  const coverage =
-    account === undefined || account.sessionGeneration === null
-      ? undefined
-      : await db.query.enableBankingHistoryCoverage.findFirst({
-          where: and(
-            eq(enableBankingHistoryCoverage.ownerId, ownerId),
-            eq(enableBankingHistoryCoverage.providerAccountId, account.id),
-            eq(enableBankingHistoryCoverage.sessionGeneration, account.sessionGeneration),
-          ),
-          orderBy: (table, { desc }) => [desc(table.completedAt)],
-        });
-  if (coverage === undefined) unmet.push('history_coverage_unavailable');
+  const coverage = await loadActivationCoverage(db, account ?? null);
+  if (coverage.length === 0) unmet.push('history_coverage_unavailable');
   return Object.freeze({ allowed: unmet.length === 0, unmet: Object.freeze(unmet) });
 }
 
@@ -562,29 +617,36 @@ export async function completeEnableBankingSync(
         'Enable Banking coverage endpoints must both be present or absent.',
       );
     }
-    const priorCoverage = await tx.query.enableBankingHistoryCoverage.findFirst({
-      where: and(
-        eq(enableBankingHistoryCoverage.ownerId, lease.ownerId),
-        eq(enableBankingHistoryCoverage.providerAccountId, lease.providerAccountId),
-        eq(enableBankingHistoryCoverage.sessionGeneration, lease.sessionGeneration),
-      ),
-    });
-    const replayProof = await tx.execute(sql<{ proven: boolean }>`
-      select exists (
-        select 1
-          from ${enableBankingSourceRevisions} revision
-          join ${enableBankingRawReceipts} receipt
-            on receipt.id = revision.receipt_id
-         where revision.owner_id = ${lease.ownerId}
-           and revision.connection_id = ${lease.connectionId}
-           and revision.provider_account_id = ${lease.providerAccountId}
-           and revision.record_kind = 'transaction'
-           and revision.provider_status = 'booked'
-           and receipt.run_id = ${lease.runId}
-           and revision.first_seen_at < revision.last_seen_at
-      ) as proven
+    // Preserve a baseline only from this generation's completed scan. A failed scan
+    // may update receiptId, but cannot create or advance these completion references.
+    await tx.execute(sql`
+      update ${enableBankingSourceRevisions} revision
+         set first_completed_run_id = case when exists (
+           select 1 from ${enableBankingRuns} prior
+            where prior.id = revision.first_completed_run_id
+              and prior.owner_id = ${lease.ownerId}
+              and prior.connection_id = ${lease.connectionId}
+              and prior.provider_account_id = ${lease.providerAccountId}
+              and prior.session_generation = ${lease.sessionGeneration}
+              and prior.status = 'completed'
+         ) then revision.first_completed_run_id else ${lease.runId}::uuid end,
+         replay_completed_run_id = case when exists (
+           select 1 from ${enableBankingRuns} prior
+            where prior.id = revision.first_completed_run_id
+              and prior.id <> ${lease.runId}::uuid
+              and prior.owner_id = ${lease.ownerId}
+              and prior.connection_id = ${lease.connectionId}
+              and prior.provider_account_id = ${lease.providerAccountId}
+              and prior.session_generation = ${lease.sessionGeneration}
+              and prior.status = 'completed'
+         ) then ${lease.runId}::uuid else null end
+        from ${enableBankingRawReceipts} receipt
+       where receipt.id = revision.receipt_id and receipt.run_id = ${lease.runId}
+         and revision.owner_id = ${lease.ownerId}
+         and revision.connection_id = ${lease.connectionId}
+         and revision.provider_account_id = ${lease.providerAccountId}
+         and revision.record_kind = 'transaction' and revision.provider_status = 'booked'
     `);
-    const bookedReplayObserved = replayProof.rows[0]?.['proven'] === true;
     if (input.coverageFrom !== null && input.coverageThrough !== null) {
       await tx
         .insert(enableBankingHistoryCoverage)
@@ -622,16 +684,6 @@ export async function completeEnableBankingSync(
         },
       });
     await tx
-      .update(enableBankingProviderAccounts)
-      .set({
-        identityVerifiedAt: input.now,
-        ...(bookedReplayObserved && priorCoverage !== undefined
-          ? { transactionIdentityVerifiedAt: input.now }
-          : {}),
-        updatedAt: input.now,
-      })
-      .where(eq(enableBankingProviderAccounts.id, lease.providerAccountId));
-    await tx
       .update(enableBankingRuns)
       .set({
         status: 'completed',
@@ -646,6 +698,27 @@ export async function completeEnableBankingSync(
         failureCategory: null,
       })
       .where(eq(enableBankingRuns.id, lease.runId));
+    const proven = await hasCompletedBookedReplay(tx, {
+      ownerId: lease.ownerId,
+      connectionId: lease.connectionId,
+      id: lease.providerAccountId,
+      sessionGeneration: lease.sessionGeneration,
+    });
+    await tx
+      .update(enableBankingProviderAccounts)
+      .set({
+        identityVerifiedAt: input.now,
+        transactionIdentityVerifiedAt: proven ? input.now : null,
+        updatedAt: input.now,
+      })
+      .where(
+        and(
+          eq(enableBankingProviderAccounts.ownerId, lease.ownerId),
+          eq(enableBankingProviderAccounts.connectionId, lease.connectionId),
+          eq(enableBankingProviderAccounts.id, lease.providerAccountId),
+          eq(enableBankingProviderAccounts.sessionGeneration, lease.sessionGeneration),
+        ),
+      );
   });
 }
 
@@ -1452,6 +1525,12 @@ export async function loadMergedEnableBankingCoverage(
     ),
     orderBy: (table, { asc }) => [asc(table.coveredFrom), asc(table.coveredThrough)],
   });
+  return mergeCoverageIntervals(rows);
+}
+
+function mergeCoverageIntervals(
+  rows: readonly EnableBankingCoverageInterval[],
+): readonly EnableBankingCoverageInterval[] {
   const merged: { coveredFrom: string; coveredThrough: string }[] = [];
   for (const row of rows) {
     const previous = merged.at(-1);

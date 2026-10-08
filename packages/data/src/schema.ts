@@ -1442,6 +1442,8 @@ export const enableBankingSourceRevisions = pgTable(
     receiptId: uuid('receipt_id')
       .notNull()
       .references(() => enableBankingRawReceipts.id),
+    firstCompletedRunId: uuid('first_completed_run_id').references(() => enableBankingRuns.id),
+    replayCompletedRunId: uuid('replay_completed_run_id').references(() => enableBankingRuns.id),
     firstSeenAt: instant('first_seen_at').notNull(),
     lastSeenAt: instant('last_seen_at').notNull(),
     isCurrent: boolean('is_current').notNull().default(true),
